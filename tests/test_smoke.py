@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import copy
+import importlib.util
 from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
+import pytest
 import torch
 from torch import nn
 
@@ -194,3 +196,53 @@ def test_metrics_use_metadata_for_enriched_count() -> None:
     assert int(metrics["n_pure"].iloc[0]) == 2
     assert int(metrics["n_enriched"].iloc[0]) == 2
 
+
+def test_score_script_shard_helpers(tmp_path) -> None:
+    pytest.importorskip("pyarrow")
+    script_path = __import__("pathlib").Path(__file__).resolve().parents[1] / "scripts" / "02_score.py"
+    spec = importlib.util.spec_from_file_location("score_script", script_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    shard_a = pd.DataFrame(
+        {
+            "seq_idx": [0, 1],
+            "nll_cond": [1.0, 1.1],
+            "nll_marg": [1.2, 1.3],
+            "color": [-0.2, -0.2],
+            "shard_start": [0, 0],
+            "shard_end": [2, 2],
+            "elapsed_seconds": [2.0, 2.0],
+            "tokens_scored": [100, 100],
+            "tokens_per_second": [50.0, 50.0],
+        }
+    )
+    shard_b = pd.DataFrame(
+        {
+            "seq_idx": [2, 3],
+            "nll_cond": [1.2, 1.3],
+            "nll_marg": [1.1, 1.0],
+            "color": [0.1, 0.3],
+            "shard_start": [2, 2],
+            "shard_end": [4, 4],
+            "elapsed_seconds": [3.0, 3.0],
+            "tokens_scored": [150, 150],
+            "tokens_per_second": [50.0, 50.0],
+        }
+    )
+    path_a = tmp_path / "part_00000000_00000002.parquet"
+    path_b = tmp_path / "part_00000002_00000004.parquet"
+    shard_a.to_parquet(path_a, index=False)
+    shard_b.to_parquet(path_b, index=False)
+
+    assert module._valid_existing_shard(path_a, shard_start=0, shard_end=2)
+    assert not module._valid_existing_shard(path_a, shard_start=1, shard_end=3)
+
+    output = tmp_path / "scores.parquet"
+    aggregate = module._combine_shards([path_b, path_a], output)
+    combined = pd.read_parquet(output)
+    assert combined["seq_idx"].tolist() == [0, 1, 2, 3]
+    assert aggregate["tokens_scored"] == 250
+    assert aggregate["elapsed_seconds"] == 5.0
+    assert aggregate["tokens_per_second"] == 50.0

@@ -18,6 +18,19 @@ cd /Users/myazdani/Documents/CI-CoLoR/color-filter-ablation
 python -m pytest
 ```
 
+## Local Checkpoint Validation
+
+After downloading and converting the two Books checkpoints, run:
+
+```bash
+PYTHONPATH=../color-filter-olmo .venv/bin/python scripts/06_local_validation.py
+```
+
+This loads both converted models on CPU, confirms the ablation block path,
+scores 200 Gutenberg-ish and 200 random C4 packed sequences, and runs one
+ablated forward check on real packed sequences. The report is written to
+`reports/layer-ablated-color-filter/local_validation.md`.
+
 ## Main Workflow
 
 1. Build a frozen pool of packed 512-token sequences.
@@ -40,4 +53,3 @@ executed by the local smoke test.
 Do not commit checkpoints, packed pools, score parquet files, or full experiment
 outputs. Keep those in Google Drive for v1. Commit code, configs, small metrics
 CSVs, and selected figures once generated.
-

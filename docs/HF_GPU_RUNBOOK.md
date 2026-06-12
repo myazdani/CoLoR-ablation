@@ -64,13 +64,29 @@ Replace the include patterns below after inspecting the tree.
 export HF_HOME=/content/drive/MyDrive/color-filter-ablation/.hf-cache
 export RAW=/content/drive/MyDrive/color-filter-ablation/assets/raw
 
-huggingface-cli download hlzhang109/CoLoR-filter \
+hf download hlzhang109/CoLoR-filter \
   --include "PATH/TO/BOOKS_PRIOR_CHECKPOINT/*" \
   --local-dir "$RAW"
 
-huggingface-cli download hlzhang109/CoLoR-filter \
+hf download hlzhang109/CoLoR-filter \
   --include "PATH/TO/BOOKS_CONDITIONAL_CHECKPOINT/*" \
   --local-dir "$RAW"
+```
+
+For local testing from the repository root, the known Books paths can be
+downloaded directly:
+
+```bash
+mkdir -p assets/raw
+export HF_HOME="$PWD/assets/.hf-cache"
+
+hf download hlzhang109/CoLoR-filter \
+  models/prior/config.yaml models/prior/model.pt \
+  --local-dir assets/raw
+
+hf download hlzhang109/CoLoR-filter \
+  models/conditional_books/config.yaml models/conditional_books/model.pt \
+  --local-dir assets/raw
 ```
 
 ## 5. Convert Checkpoints Once
@@ -86,12 +102,20 @@ mkdir -p "$HF_ASSETS/books_marg_hf" "$HF_ASSETS/books_cond_hf"
 cp -R "$RAW/PATH/TO/BOOKS_PRIOR_CHECKPOINT/." "$HF_ASSETS/books_marg_hf/"
 cp -R "$RAW/PATH/TO/BOOKS_CONDITIONAL_CHECKPOINT/." "$HF_ASSETS/books_cond_hf/"
 
-PYTHONPATH="$OLMO" python "$OLMO/hf_olmo/convert_olmo_to_hf.py" \
+PYTHONPATH="$OLMO" python scripts/05_convert_olmo_to_hf.py \
   --checkpoint-dir "$HF_ASSETS/books_marg_hf"
 
-PYTHONPATH="$OLMO" python "$OLMO/hf_olmo/convert_olmo_to_hf.py" \
+PYTHONPATH="$OLMO" python scripts/05_convert_olmo_to_hf.py \
   --checkpoint-dir "$HF_ASSETS/books_cond_hf"
 ```
+
+The repo-local converter differs from the paper fork's converter in two local
+debugging details:
+
+- it loads `model.pt` with `map_location="cpu"`, which is required on CPU-only
+  machines when checkpoints were saved from CUDA;
+- it redirects Hugging Face and `cached_path` caches under `assets/` instead of
+  `~/.cache`.
 
 Then update `configs/default.yaml`:
 
@@ -150,6 +174,11 @@ for variant in top1 top2 top4 top6 mid2 mid4 bot2 bot4 skip2; do
   python scripts/02_score.py --config configs/default.yaml --variant "$variant"
 done
 ```
+
+`02_score.py` writes resumable shard parquets by default using
+`scoring.shard_size` from the config. On restart, completed shards are validated
+by `seq_idx` range and skipped, then the combined `scores_<variant>.parquet` is
+rebuilt from all shards. Use `--no-shards` only for small debugging runs.
 
 For a noise-floor rescore, use a separate output path while preserving no
 ablation:

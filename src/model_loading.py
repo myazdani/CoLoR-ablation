@@ -27,6 +27,23 @@ def register_local_olmo(paper_code_path: str | Path | None) -> None:
         AutoModelForCausalLM.register(OLMoConfig, OLMoForCausalLM)
     except ValueError:
         pass
+    _patch_olmo_output_embeddings(OLMoForCausalLM)
+
+
+def _patch_olmo_output_embeddings(model_cls: type) -> None:
+    def get_output_embeddings(self):
+        if self.config.weight_tying:
+            return self.model.transformer.wte
+        return self.model.transformer.ff_out_last
+
+    def set_output_embeddings(self, value):
+        if self.config.weight_tying:
+            self.model.transformer.wte = value
+        else:
+            self.model.transformer.ff_out_last = value
+
+    model_cls.get_output_embeddings = get_output_embeddings
+    model_cls.set_output_embeddings = set_output_embeddings
 
 
 def load_causal_lm(
@@ -36,12 +53,8 @@ def load_causal_lm(
     dtype: str = "bf16",
 ):
     register_local_olmo(paper_code_path)
-    try:
-        from transformers import AutoModelForCausalLM
-    except ImportError as exc:
-        raise RuntimeError("Install requirements.txt before loading HF checkpoints") from exc
 
-    kwargs = {"trust_remote_code": True}
+    kwargs = {}
     if dtype == "bf16":
         kwargs["torch_dtype"] = torch.bfloat16
     elif dtype == "fp16":
@@ -50,5 +63,15 @@ def load_causal_lm(
         kwargs["torch_dtype"] = torch.float32
     elif dtype not in {"auto", "none", ""}:
         raise ValueError(f"Unsupported dtype '{dtype}'")
-    return AutoModelForCausalLM.from_pretrained(str(checkpoint_path), **kwargs)
 
+    if paper_code_path:
+        from hf_olmo.modeling_olmo import OLMoForCausalLM
+
+        return OLMoForCausalLM.from_pretrained(str(checkpoint_path), **kwargs)
+
+    try:
+        from transformers import AutoModelForCausalLM
+    except ImportError as exc:
+        raise RuntimeError("Install requirements.txt before loading HF checkpoints") from exc
+    kwargs["trust_remote_code"] = True
+    return AutoModelForCausalLM.from_pretrained(str(checkpoint_path), **kwargs)
