@@ -1,0 +1,58 @@
+seed: 17
+
+target:
+  name: books
+  cond_checkpoint: assets/books_cond_hf
+  marg_checkpoint: assets/books_marg_hf
+  pool_tokens: data/books_pool.npy
+  pool_meta: data/books_pool_meta.parquet
+
+paths:
+  paper_code: ../color-filter-olmo
+  results_dir: results
+  figures_dir: reports/layer-ablated-color-filter/figures
+  metrics_csv: results/metrics.csv
+
+pool:
+  sequence_length: 512
+  tokenizer: allenai/eleuther-ai-gpt-neox-20b-pii-special
+  c4:
+    source: allenai/c4
+    name: en
+    split: train
+    n_sequences: 100000
+    seed: 17
+    shuffle_buffer: 10000
+  enriched:
+    source: davidbrandfonbrener/color-filtered-c4-books
+    split: train
+    n: 5000
+    seed: 17
+    shuffle_buffer: 10000
+
+scoring:
+  batch_size: 64
+  dtype: bf16
+  device: auto
+  shard_size: 5000
+  total_layers: 12
+
+variants:
+  - id: full
+  - id: top1
+  - id: top2
+  - id: top4
+  - id: top6
+  - id: mid2
+  - id: mid4
+  - id: bot2
+  - id: bot4
+  - id: skip2
+
+metrics:
+  selection_rates: [0.015625, 0.03125, 0.0625, 0.125, 0.25]
+  bootstrap_reps: 1000
+  bootstrap_seed: 17
+  tail_rate_for_local_spearman: 0.125
+  main_plot_selection_rate: 0.0625
+
