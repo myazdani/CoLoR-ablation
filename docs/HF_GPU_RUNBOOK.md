@@ -1,191 +1,273 @@
-# Deferred HF / Drive / GPU Runbook
+# Colab Runbook
 
-These commands are documented for the Colab/A100 phase. They were not executed
-during local scaffolding.
+This is the shortest path from the Colab file layout shown in the screenshot to
+converted checkpoints, a sanity check, and GPU scoring.
 
-## 1. Hugging Face Token Scope
-
-For v1 Drive-only artifacts, create a fine-grained Hugging Face token with:
-
-- `Repositories -> Read access to contents of all public gated repos you can access`
-
-Leave inference, jobs, billing, webhooks, discussions, org permissions, and
-broad write permissions unchecked.
-
-In Colab, store it as a secret named `HF_TOKEN`. The Hugging Face Hub client
-uses `HF_TOKEN` automatically when present.
-
-## 2. Colab Setup
-
-```bash
-git clone <YOUR_GITHUB_REMOTE_FOR_THIS_REPO> color-filter-ablation
-git clone https://github.com/davidbrandfonbrener/color-filter-olmo.git color-filter-olmo
-cd color-filter-ablation
-pip install -r requirements.txt
-```
-
-If running from a notebook, mount Drive first:
-
-```python
-from google.colab import drive
-drive.mount("/content/drive")
-```
-
-Recommended Drive layout:
+Assumed Colab layout:
 
 ```text
-/content/drive/MyDrive/color-filter-ablation/
-  assets/raw/
-  assets/hf/
-  data/
-  results/
+/content/CoLoR-ablation/
+  assets/raw/models/prior/model.pt
+  assets/raw/models/conditional_books/model.pt
+  configs/
+  scripts/
+  src/
 ```
 
-## 3. Identify the Books Checkpoints
+If your folder is named differently, change `PROJECT` in the first cell.
 
-Open the Hugging Face repository in a browser:
+## 1. Setup
+
+Run from a Colab notebook cell:
+
+```bash
+PROJECT=/content/CoLoR-ablation
+OLMO=/content/color-filter-olmo
+
+cd "$PROJECT"
+python -m pip install -q -r requirements.txt
+
+if [ ! -d "$OLMO" ]; then
+  git clone https://github.com/davidbrandfonbrener/color-filter-olmo.git "$OLMO"
+fi
+```
+
+Recommended Colab runtime: GPU. Conversion and the local sanity script can run
+without GPU, but scoring the full pool should use GPU.
+
+## 2. Make Sure Config Files Exist
+
+Your screenshot shows `model.pt` under both checkpoint folders. Conversion also
+needs `config.yaml`. Check:
+
+```bash
+cd /content/CoLoR-ablation
+find assets/raw/models -maxdepth 2 -type f | sort
+```
+
+You should see all four files:
 
 ```text
-https://huggingface.co/hlzhang109/CoLoR-filter/tree/main
+assets/raw/models/conditional_books/config.yaml
+assets/raw/models/conditional_books/model.pt
+assets/raw/models/prior/config.yaml
+assets/raw/models/prior/model.pt
 ```
 
-Identify only these two checkpoint folders:
-
-- Books prior / marginal model, `theta_marg`
-- Books conditional model, `theta_cond`
-
-Do not download the whole repo; it is expected to be hundreds of GB.
-
-## 4. Download Only the Two Checkpoint Folders
-
-Replace the include patterns below after inspecting the tree.
+If the two `config.yaml` files are missing, download only those small files:
 
 ```bash
-export HF_HOME=/content/drive/MyDrive/color-filter-ablation/.hf-cache
-export RAW=/content/drive/MyDrive/color-filter-ablation/assets/raw
+cd /content/CoLoR-ablation
 
-hf download hlzhang109/CoLoR-filter \
-  --include "PATH/TO/BOOKS_PRIOR_CHECKPOINT/*" \
-  --local-dir "$RAW"
+python - <<'PY'
+from huggingface_hub import hf_hub_download
 
-hf download hlzhang109/CoLoR-filter \
-  --include "PATH/TO/BOOKS_CONDITIONAL_CHECKPOINT/*" \
-  --local-dir "$RAW"
+for filename in [
+    "models/prior/config.yaml",
+    "models/conditional_books/config.yaml",
+]:
+    path = hf_hub_download(
+        repo_id="hlzhang109/CoLoR-filter",
+        filename=filename,
+        local_dir="assets/raw",
+    )
+    print(path)
+PY
 ```
 
-For local testing from the repository root, the known Books paths can be
-downloaded directly:
+If the large `model.pt` files are also missing, download them explicitly:
 
 ```bash
-mkdir -p assets/raw
-export HF_HOME="$PWD/assets/.hf-cache"
+cd /content/CoLoR-ablation
 
-hf download hlzhang109/CoLoR-filter \
-  models/prior/config.yaml models/prior/model.pt \
-  --local-dir assets/raw
+python - <<'PY'
+from huggingface_hub import hf_hub_download
 
-hf download hlzhang109/CoLoR-filter \
-  models/conditional_books/config.yaml models/conditional_books/model.pt \
-  --local-dir assets/raw
+for filename in [
+    "models/prior/model.pt",
+    "models/conditional_books/model.pt",
+]:
+    path = hf_hub_download(
+        repo_id="hlzhang109/CoLoR-filter",
+        filename=filename,
+        local_dir="assets/raw",
+    )
+    print(path)
+PY
 ```
 
-## 5. Convert Checkpoints Once
+Do not download the whole `hlzhang109/CoLoR-filter` repo.
 
-The local `color-filter-olmo` fork contains the conversion utility. Keep the
-converted checkpoints in Drive.
+## 3. Convert Checkpoints
+
+The converted checkpoints live under `assets/hf/`. This keeps raw downloads
+unchanged.
 
 ```bash
-export OLMO=/content/color-filter-olmo
-export HF_ASSETS=/content/drive/MyDrive/color-filter-ablation/assets/hf
+cd /content/CoLoR-ablation
 
-mkdir -p "$HF_ASSETS/books_marg_hf" "$HF_ASSETS/books_cond_hf"
-cp -R "$RAW/PATH/TO/BOOKS_PRIOR_CHECKPOINT/." "$HF_ASSETS/books_marg_hf/"
-cp -R "$RAW/PATH/TO/BOOKS_CONDITIONAL_CHECKPOINT/." "$HF_ASSETS/books_cond_hf/"
+mkdir -p assets/hf/books_marg_hf assets/hf/books_cond_hf
 
-PYTHONPATH="$OLMO" python scripts/05_convert_olmo_to_hf.py \
-  --checkpoint-dir "$HF_ASSETS/books_marg_hf"
+cp assets/raw/models/prior/config.yaml assets/raw/models/prior/model.pt \
+  assets/hf/books_marg_hf/
+cp assets/raw/models/conditional_books/config.yaml assets/raw/models/conditional_books/model.pt \
+  assets/hf/books_cond_hf/
 
-PYTHONPATH="$OLMO" python scripts/05_convert_olmo_to_hf.py \
-  --checkpoint-dir "$HF_ASSETS/books_cond_hf"
+PYTHONPATH=/content/color-filter-olmo python scripts/05_convert_olmo_to_hf.py \
+  --checkpoint-dir assets/hf/books_marg_hf
+
+PYTHONPATH=/content/color-filter-olmo python scripts/05_convert_olmo_to_hf.py \
+  --checkpoint-dir assets/hf/books_cond_hf
 ```
 
-The repo-local converter differs from the paper fork's converter in two local
-debugging details:
+Expected converted files:
 
-- it loads `model.pt` with `map_location="cpu"`, which is required on CPU-only
-  machines when checkpoints were saved from CUDA;
-- it redirects Hugging Face and `cached_path` caches under `assets/` instead of
-  `~/.cache`.
+```bash
+find assets/hf/books_marg_hf assets/hf/books_cond_hf -maxdepth 1 -type f | sort
+```
 
-Then update `configs/default.yaml`:
+You should see `config.json`, `pytorch_model.bin`, `tokenizer.json`, and
+tokenizer metadata in both converted directories.
+
+## 4. Run a Fast Sanity Check
+
+First run a tiny check so failures appear quickly:
+
+```bash
+cd /content/CoLoR-ablation
+
+PYTHONPATH=/content/color-filter-olmo python scripts/06_local_validation.py \
+  --paper-code /content/color-filter-olmo \
+  --n-per-domain 2 \
+  --batch-size 1 \
+  --report reports/layer-ablated-color-filter/local_validation_tiny.md
+```
+
+Then run the fuller local sanity check:
+
+```bash
+PYTHONPATH=/content/color-filter-olmo python scripts/06_local_validation.py \
+  --paper-code /content/color-filter-olmo \
+  --n-per-domain 200 \
+  --batch-size 4 \
+  --report reports/layer-ablated-color-filter/local_validation.md
+```
+
+Expected direction:
+
+- Gutenberg-ish mean CoLoR should be lower than C4 mean CoLoR.
+- The module path should print as `model.transformer.blocks`.
+- The ablated `top4` forward check should produce finite, non-identical
+  `nll_cond` and `nll_marg`.
+
+The 200-vs-200 check is CPU-only in this script and can take a while. It is a
+validation step, not the main GPU scoring path.
+
+## 5. Write a Colab Config
+
+Create `configs/colab.yaml` with paths matching this Colab runtime:
+
+```bash
+cd /content/CoLoR-ablation
+
+python - <<'PY'
+from pathlib import Path
+import yaml
+
+cfg = yaml.safe_load(Path("configs/default.yaml").read_text())
+
+cfg["target"]["cond_checkpoint"] = "assets/hf/books_cond_hf"
+cfg["target"]["marg_checkpoint"] = "assets/hf/books_marg_hf"
+cfg["target"]["pool_tokens"] = "data/books_pool.npy"
+cfg["target"]["pool_meta"] = "data/books_pool_meta.parquet"
+
+cfg["paths"]["paper_code"] = "/content/color-filter-olmo"
+cfg["paths"]["results_dir"] = "results"
+cfg["paths"]["figures_dir"] = "reports/layer-ablated-color-filter/figures"
+cfg["paths"]["metrics_csv"] = "results/metrics.csv"
+
+cfg["scoring"]["device"] = "auto"
+cfg["scoring"]["dtype"] = "bf16"
+cfg["scoring"]["batch_size"] = 64
+cfg["scoring"]["shard_size"] = 5000
+
+Path("data").mkdir(exist_ok=True)
+Path("results").mkdir(exist_ok=True)
+Path("configs/colab.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
+print(Path("configs/colab.yaml").read_text())
+PY
+```
+
+For a small GPU shakedown before the full pool, edit `configs/colab.yaml` and
+temporarily reduce:
 
 ```yaml
-target:
-  cond_checkpoint: /content/drive/MyDrive/color-filter-ablation/assets/hf/books_cond_hf
-  marg_checkpoint: /content/drive/MyDrive/color-filter-ablation/assets/hf/books_marg_hf
-  pool_tokens: /content/drive/MyDrive/color-filter-ablation/data/books_pool.npy
-  pool_meta: /content/drive/MyDrive/color-filter-ablation/data/books_pool_meta.parquet
-
-paths:
-  paper_code: /content/color-filter-olmo
-  results_dir: /content/drive/MyDrive/color-filter-ablation/results
-  figures_dir: /content/drive/MyDrive/color-filter-ablation/reports/layer-ablated-color-filter/figures
-  metrics_csv: /content/drive/MyDrive/color-filter-ablation/results/metrics.csv
+pool:
+  c4:
+    n_sequences: 1000
+  enriched:
+    n: 100
 ```
+
+Do not use shakedown results for the final study.
 
 ## 6. Build the Frozen Pool
 
 ```bash
-python scripts/01_build_pool.py --config configs/default.yaml
+cd /content/CoLoR-ablation
+python scripts/01_build_pool.py --config configs/colab.yaml
 ```
 
-Verify the metadata before scoring:
+Check the enriched quarantine column:
 
 ```bash
 python - <<'PY'
 import pandas as pd
-meta = pd.read_parquet("/content/drive/MyDrive/color-filter-ablation/data/books_pool_meta.parquet")
+meta = pd.read_parquet("data/books_pool_meta.parquet")
 print(meta["enriched"].value_counts(dropna=False))
 print(meta.head())
 PY
 ```
 
-Expected v1 count: 100,000 non-enriched C4 sequences and 5,000 enriched
+Expected full v1 pool: `100000` non-enriched C4 sequences and `5000` enriched
 known-selected Books sequences.
 
-## 7. Sanity-Check the Checkpoint Pair
-
-Before ablations, score the full pair and verify that the enriched known-selected
-Books sequences land heavily in the negative tail.
+## 7. Score the Full Pair First
 
 ```bash
-python scripts/02_score.py --config configs/default.yaml --variant full
-python scripts/03_metrics.py --config configs/default.yaml
-```
-
-Inspect `full_enriched_selected_frac` in `results/metrics.csv`. If enriched
-sequences are not strongly overrepresented in the low-score tail, stop and
-debug checkpoint pairing or loss computation.
-
-## 8. Run Ablation Scoring
-
-```bash
-for variant in top1 top2 top4 top6 mid2 mid4 bot2 bot4 skip2; do
-  python scripts/02_score.py --config configs/default.yaml --variant "$variant"
-done
+cd /content/CoLoR-ablation
+python scripts/02_score.py --config configs/colab.yaml --variant full
 ```
 
 `02_score.py` writes resumable shard parquets by default using
-`scoring.shard_size` from the config. On restart, completed shards are validated
-by `seq_idx` range and skipped, then the combined `scores_<variant>.parquet` is
-rebuilt from all shards. Use `--no-shards` only for small debugging runs.
+`scoring.shard_size`. On restart, completed shards are validated by `seq_idx`
+range and skipped, then the combined `scores_<variant>.parquet` is rebuilt.
 
-For a noise-floor rescore, use a separate output path while preserving no
-ablation:
+After full scoring, compute metrics once:
+
+```bash
+python scripts/03_metrics.py --config configs/colab.yaml
+```
+
+Inspect `results/metrics.csv`. The enriched known-selected Books sequences
+should be strongly overrepresented in the low-score tail. If not, stop and debug
+checkpoint pairing, tokenizer, or loss computation before ablations.
+
+## 8. Run Ablations
+
+```bash
+cd /content/CoLoR-ablation
+
+for variant in top1 top2 top4 top6 mid2 mid4 bot2 bot4 skip2; do
+  python scripts/02_score.py --config configs/colab.yaml --variant "$variant"
+done
+```
+
+Optional noise-floor rescore:
 
 ```bash
 python scripts/02_score.py \
-  --config configs/default.yaml \
+  --config configs/colab.yaml \
   --variant full \
   --score-id full_rescore
 ```
@@ -193,18 +275,29 @@ python scripts/02_score.py \
 ## 9. Metrics and Plots
 
 ```bash
-python scripts/03_metrics.py --config configs/default.yaml
-python scripts/04_plots.py --config configs/default.yaml --scatter-variant top4
+cd /content/CoLoR-ablation
+python scripts/03_metrics.py --config configs/colab.yaml
+python scripts/04_plots.py --config configs/colab.yaml --scatter-variant top4
 ```
 
-Primary output:
+Primary outputs:
 
 - `results/metrics.csv`
-- overlap@top-k figure
-- Spearman figure
-- speedup/overlap Pareto figure
-- ablated-vs-full score scatter
+- `reports/layer-ablated-color-filter/figures/overlap_at_topk.png`
+- `reports/layer-ablated-color-filter/figures/spearman_vs_layers.png`
+- `reports/layer-ablated-color-filter/figures/pareto_speedup_overlap.png`
+- `reports/layer-ablated-color-filter/figures/scatter_top4.png`
 
-The pre-registered benchmark is useful context, but the primary result is the
-Pareto curve and the decomposition between individual NLL degradation and
-CoLoR-score robustness.
+## 10. Persist Important Artifacts
+
+Files under `/content` disappear when the Colab runtime is reset. Copy at least
+these to Drive:
+
+```bash
+mkdir -p /content/drive/MyDrive/color-filter-ablation
+rsync -a results reports data configs/colab.yaml \
+  /content/drive/MyDrive/color-filter-ablation/
+```
+
+If you do not want to reconvert after every runtime reset, also copy
+`assets/hf/` to Drive.
