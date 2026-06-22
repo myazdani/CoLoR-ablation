@@ -82,6 +82,25 @@ def _patch_olmo_output_embeddings(model_cls: type) -> None:
         model_cls.all_tied_weights_keys = {}
 
 
+def _ensure_config_attr(config: object, name: str, value: object) -> None:
+    try:
+        getattr(config, name)
+    except AttributeError:
+        setattr(config, name, value)
+
+
+def _finalize_loaded_model(model: torch.nn.Module) -> torch.nn.Module:
+    config = getattr(model, "config", None)
+    if config is not None:
+        _ensure_config_attr(config, "use_cache", False)
+        _ensure_config_attr(config, "use_return_dict", True)
+    inner_model = getattr(model, "model", None)
+    inner_config = getattr(inner_model, "config", None)
+    if inner_config is not None:
+        _ensure_config_attr(inner_config, "use_cache", False)
+    return model
+
+
 def load_causal_lm(
     checkpoint_path: str | Path,
     *,
@@ -104,11 +123,11 @@ def load_causal_lm(
     if paper_code_path:
         from hf_olmo.modeling_olmo import OLMoForCausalLM
 
-        return OLMoForCausalLM.from_pretrained(str(checkpoint_path), **kwargs)
+        return _finalize_loaded_model(OLMoForCausalLM.from_pretrained(str(checkpoint_path), **kwargs))
 
     try:
         from transformers import AutoModelForCausalLM
     except ImportError as exc:
         raise RuntimeError("Install requirements.txt before loading HF checkpoints") from exc
     kwargs["trust_remote_code"] = True
-    return AutoModelForCausalLM.from_pretrained(str(checkpoint_path), **kwargs)
+    return _finalize_loaded_model(AutoModelForCausalLM.from_pretrained(str(checkpoint_path), **kwargs))

@@ -43,6 +43,16 @@ def _extract_logits(output: Any) -> torch.Tensor:
     raise TypeError("Model output has no logits")
 
 
+def _forward_no_cache(model: torch.nn.Module, input_ids: torch.Tensor) -> Any:
+    try:
+        return model(input_ids=input_ids, use_cache=False, return_dict=True)
+    except TypeError:
+        try:
+            return model(input_ids=input_ids, use_cache=False)
+        except TypeError:
+            return model(input_ids=input_ids)
+
+
 @torch.inference_mode()
 def sequence_mean_nll(
     model: torch.nn.Module,
@@ -59,7 +69,7 @@ def sequence_mean_nll(
     device_type = input_ids.device.type
     use_autocast = device_type == "cuda" and autocast_dtype in {torch.bfloat16, torch.float16}
     with torch.autocast(device_type, enabled=use_autocast, dtype=autocast_dtype):
-        logits = _extract_logits(model(input_ids=input_ids))
+        logits = _extract_logits(_forward_no_cache(model, input_ids))
 
     shift_logits = logits[:, :-1, :].contiguous().float()
     shift_labels = input_ids[:, 1:].contiguous()
@@ -151,4 +161,3 @@ def score_pair(
         "tokens_per_second": tokens / elapsed if elapsed > 0 else float("nan"),
     }
     return frame, stats
-

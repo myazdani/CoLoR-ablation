@@ -140,7 +140,9 @@ clear checkpoint preflight. `src/model_loading.py` also carries compatibility
 patches for Colab's newer `transformers`; stale copies can fail with
 `AttributeError: 'OLMoForCausalLM' object has no attribute 'all_tied_weights_keys'`
 or `TypeError: OLMoForCausalLM.tie_weights() got an unexpected keyword argument
-'missing_keys'`.
+'missing_keys'`. Older converted checkpoints can also lack `config.use_cache`,
+so the current loader/scoring code fills that default and forces cache-free
+forward passes.
 
 ```python
 # PYTHON CELL
@@ -154,6 +156,7 @@ else:
 from pathlib import Path
 validation_script = Path("scripts/06_local_validation.py").read_text()
 model_loading = Path("src/model_loading.py").read_text()
+scoring = Path("src/scoring.py").read_text()
 if "validate_checkpoint_dir" not in validation_script:
     raise RuntimeError(
         "scripts/06_local_validation.py is stale. Pull/re-upload the latest repo "
@@ -169,8 +172,19 @@ if "def tie_weights(self, *args, **kwargs)" not in model_loading:
         "src/model_loading.py is missing the newer Transformers tie_weights "
         "compatibility patch. Pull/re-upload the latest repo before Step 4."
     )
+if "_finalize_loaded_model" not in model_loading:
+    raise RuntimeError(
+        "src/model_loading.py is missing the OLMo config default patch "
+        "(use_cache/use_return_dict). Pull/re-upload the latest repo before Step 4."
+    )
+if "_forward_no_cache" not in scoring:
+    raise RuntimeError(
+        "src/scoring.py is missing the cache-free forward compatibility patch. "
+        "Pull/re-upload the latest repo before Step 4."
+    )
 print("Validation script has checkpoint preflight.")
-print("Model loader has Transformers compatibility patch.")
+print("Model loader has Transformers/OLMo config compatibility patches.")
+print("Scoring path has cache-free forward compatibility patch.")
 ```
 
 ---

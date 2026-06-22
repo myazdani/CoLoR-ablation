@@ -12,6 +12,7 @@ from torch import nn
 
 from src.ablation import apply_paired_ablation, find_block_module_list, variant_layer_indices
 from src.metrics import compute_all_metrics, compute_variant_metrics
+from src.model_loading import _finalize_loaded_model
 from src.packing import build_synthetic_pool
 from src.scoring import score_pair
 
@@ -52,6 +53,24 @@ class TinyLM(nn.Module):
         return TinyOutput(self.head(self.norm(x)))
 
 
+class CacheKwargLM(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.config = SimpleNamespace()
+        self.embed = nn.Embedding(11, 8)
+        self.head = nn.Linear(8, 11)
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        use_cache: bool | None = None,
+        return_dict: bool | None = None,
+    ) -> TinyOutput:
+        if use_cache is None:
+            raise AssertionError("scoring should pass use_cache=False when the model accepts it")
+        return TinyOutput(self.head(self.embed(input_ids)))
+
+
 def _make_pair() -> tuple[TinyLM, TinyLM]:
     marg = TinyLM(layers=4, vocab_size=37, dim=24, sequence_length=16, seed=123)
     cond = copy.deepcopy(marg)
@@ -60,6 +79,31 @@ def _make_pair() -> tuple[TinyLM, TinyLM]:
         for param in cond.parameters():
             param.add_(0.01 * torch.randn_like(param))
     return cond, marg
+
+
+def test_loaded_model_finalizes_missing_olmo_config_defaults() -> None:
+    model = nn.Module()
+    model.config = SimpleNamespace()
+    model.model = SimpleNamespace(config=SimpleNamespace())
+
+    finalized = _finalize_loaded_model(model)
+
+    assert finalized is model
+    assert model.config.use_cache is False
+    assert model.config.use_return_dict is True
+    assert model.model.config.use_cache is False
+
+
+def test_scoring_passes_cache_free_forward_kwargs_when_supported() -> None:
+    pool = np.array([[1, 2, 3, 4], [4, 3, 2, 1]], dtype=np.int64)
+    cond = CacheKwargLM()
+    marg = CacheKwargLM()
+
+    scores, stats = score_pair(cond, marg, pool, batch_size=2, device="cpu", dtype="fp32")
+
+    assert len(scores) == 2
+    assert np.isfinite(scores["color"]).all()
+    assert stats["tokens_per_second"] > 0
 
 
 def test_variant_index_math() -> None:
