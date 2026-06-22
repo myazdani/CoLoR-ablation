@@ -1,0 +1,30 @@
+# Minimal Colab overlay.
+#
+# Install with:
+#   pip install --no-deps -r requirements-colab.txt
+#
+# Do not use requirements.txt in Colab: it is the local-laptop reproducibility
+# file and pins torch/numpy/scipy/transformers/huggingface_hub versions that
+# conflict with Colab's preinstalled CUDA runtime.
+#
+# Keep core Colab packages (torch, torchvision, numpy, requests, fsspec,
+# huggingface_hub, etc.) at the runtime-provided versions unless a concrete
+# failure proves otherwise.
+
+antlr4-python3-runtime==4.9.3
+omegaconf==2.3.0
+cached_path==1.8.10
+
+datasets
+dill
+multiprocess
+xxhash
+pyarrow
+pandas
+matplotlib
+scipy
+transformers
+huggingface_hub
+safetensors
+tokenizers
+tqdm

@@ -83,7 +83,26 @@ if not os.path.isdir(OLMO):
 !git -C {OLMO} checkout {OLMO_SHA}
 
 %cd {PROJECT}
-!pip install -q -r requirements.txt
+!pip install -q --no-deps -r requirements-colab.txt
+```
+
+Do **not** run `pip install -r requirements.txt` in Colab. That file is for the
+local laptop environment and pins old versions of `torch`, `numpy`, `scipy`,
+`transformers`, and `huggingface_hub`; installing it in Colab downgrades the
+runtime's CUDA/PyTorch stack and creates resolver warnings like:
+
+```text
+torchvision requires torch==...
+google-colab requires requests==...
+diffusers/gradio/peft require newer huggingface-hub...
+```
+
+If you already ran `pip install -r requirements.txt` in this Colab runtime,
+restart the runtime before continuing:
+
+```python
+# PYTHON CELL
+# Runtime -> Restart runtime, then rerun this runbook from Step 0.
 ```
 
 Make the pinned fork importable in *this* Python session (needed for scoring,
