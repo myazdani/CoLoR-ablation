@@ -138,7 +138,9 @@ The validation script changed after the first Colab runbook; a stale copy fails
 with a Hugging Face `Repo id must be in the form...` error instead of the
 clear checkpoint preflight. `src/model_loading.py` also carries compatibility
 patches for Colab's newer `transformers`; stale copies can fail with
-`AttributeError: 'OLMoForCausalLM' object has no attribute 'all_tied_weights_keys'`.
+`AttributeError: 'OLMoForCausalLM' object has no attribute 'all_tied_weights_keys'`
+or `TypeError: OLMoForCausalLM.tie_weights() got an unexpected keyword argument
+'missing_keys'`.
 
 ```python
 # PYTHON CELL
@@ -161,6 +163,11 @@ if "all_tied_weights_keys" not in model_loading:
     raise RuntimeError(
         "src/model_loading.py is stale. Pull/re-upload the latest repo before "
         "running Step 4."
+    )
+if "def tie_weights(self, *args, **kwargs)" not in model_loading:
+    raise RuntimeError(
+        "src/model_loading.py is missing the newer Transformers tie_weights "
+        "compatibility patch. Pull/re-upload the latest repo before Step 4."
     )
 print("Validation script has checkpoint preflight.")
 print("Model loader has Transformers compatibility patch.")
