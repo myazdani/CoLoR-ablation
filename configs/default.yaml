@@ -24,7 +24,8 @@ pool:
     seed: 17
     shuffle_buffer: 10000
   enriched:
-    source: davidbrandfonbrener/color-filtered-c4-books
+    source: davidbrandfonbrener/color-filtered-c4
+    name: color-filtered-c4-books
     split: train
     n: 5000
     seed: 17
@@ -55,4 +56,3 @@ metrics:
   bootstrap_seed: 17
   tail_rate_for_local_spearman: 0.125
   main_plot_selection_rate: 0.0625
-

@@ -11,6 +11,7 @@ import torch
 from torch import nn
 
 from src.ablation import apply_paired_ablation, find_block_module_list, variant_layer_indices
+from src.config import load_config
 from src.metrics import compute_all_metrics, compute_variant_metrics
 from src.model_loading import _finalize_loaded_model
 from src.packing import build_synthetic_pool
@@ -104,6 +105,15 @@ def test_scoring_passes_cache_free_forward_kwargs_when_supported() -> None:
     assert len(scores) == 2
     assert np.isfinite(scores["color"]).all()
     assert stats["tokens_per_second"] > 0
+
+
+def test_default_config_uses_color_filtered_c4_books_subset() -> None:
+    config = load_config("configs/default.yaml")
+    enriched = config["pool"]["enriched"]
+
+    assert enriched["source"] == "davidbrandfonbrener/color-filtered-c4"
+    assert enriched["name"] == "color-filtered-c4-books"
+    assert enriched["split"] == "train"
 
 
 def test_variant_index_math() -> None:

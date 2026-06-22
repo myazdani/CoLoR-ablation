@@ -298,6 +298,9 @@ cfg["paths"]["results_dir"] = f"{DRIVE}/results"
 cfg["paths"]["figures_dir"] = f"{DRIVE}/reports/layer-ablated-color-filter/figures"
 cfg["paths"]["metrics_csv"] = f"{DRIVE}/results/metrics.csv"
 
+cfg["pool"]["enriched"]["source"] = "davidbrandfonbrener/color-filtered-c4"
+cfg["pool"]["enriched"]["name"] = "color-filtered-c4-books"
+
 cfg_path.write_text(yaml.safe_dump(cfg, sort_keys=False))
 print(cfg_path.read_text())
 ```
@@ -343,6 +346,23 @@ for key in ["marg_checkpoint", "cond_checkpoint"]:
         )
 ```
 
+Verify the enriched Books dataset points at the parent Hugging Face dataset repo
+and the Books subset/config. The dataset card lists
+`color-filtered-c4-books` as a subset of
+`davidbrandfonbrener/color-filtered-c4`; using
+`davidbrandfonbrener/color-filtered-c4-books` as the repo id will fail with
+`DatasetNotFoundError`.
+
+```python
+# PYTHON CELL
+enriched = cfg["pool"]["enriched"]
+print(enriched)
+if enriched.get("source") != "davidbrandfonbrener/color-filtered-c4":
+    raise ValueError("pool.enriched.source must be davidbrandfonbrener/color-filtered-c4")
+if enriched.get("name") != "color-filtered-c4-books":
+    raise ValueError("pool.enriched.name must be color-filtered-c4-books")
+```
+
 Equivalent YAML values:
 
 ```yaml
@@ -357,6 +377,12 @@ paths:
   results_dir: /content/drive/MyDrive/color-filter-ablation/results
   figures_dir: /content/drive/MyDrive/color-filter-ablation/reports/layer-ablated-color-filter/figures
   metrics_csv: /content/drive/MyDrive/color-filter-ablation/results/metrics.csv
+
+pool:
+  enriched:
+    source: davidbrandfonbrener/color-filtered-c4
+    name: color-filtered-c4-books
+    split: train
 ```
 
 ---
