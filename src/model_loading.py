@@ -72,6 +72,10 @@ def _patch_olmo_output_embeddings(model_cls: type) -> None:
 
     model_cls.get_output_embeddings = get_output_embeddings
     model_cls.set_output_embeddings = set_output_embeddings
+    # Newer Transformers releases consult this dict during meta-device loading.
+    # The paper fork predates it and only relies on its no-op tie_weights().
+    if not hasattr(model_cls, "all_tied_weights_keys"):
+        model_cls.all_tied_weights_keys = {}
 
 
 def load_causal_lm(

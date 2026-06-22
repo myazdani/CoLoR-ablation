@@ -136,7 +136,9 @@ if OLMO not in sys.path:
 If the repo already existed in Colab from an earlier attempt, update it now.
 The validation script changed after the first Colab runbook; a stale copy fails
 with a Hugging Face `Repo id must be in the form...` error instead of the
-clear checkpoint preflight.
+clear checkpoint preflight. `src/model_loading.py` also carries compatibility
+patches for Colab's newer `transformers`; stale copies can fail with
+`AttributeError: 'OLMoForCausalLM' object has no attribute 'all_tied_weights_keys'`.
 
 ```python
 # PYTHON CELL
@@ -149,12 +151,19 @@ else:
 
 from pathlib import Path
 validation_script = Path("scripts/06_local_validation.py").read_text()
+model_loading = Path("src/model_loading.py").read_text()
 if "validate_checkpoint_dir" not in validation_script:
     raise RuntimeError(
         "scripts/06_local_validation.py is stale. Pull/re-upload the latest repo "
         "before running Step 4."
     )
+if "all_tied_weights_keys" not in model_loading:
+    raise RuntimeError(
+        "src/model_loading.py is stale. Pull/re-upload the latest repo before "
+        "running Step 4."
+    )
 print("Validation script has checkpoint preflight.")
+print("Model loader has Transformers compatibility patch.")
 ```
 
 ---
