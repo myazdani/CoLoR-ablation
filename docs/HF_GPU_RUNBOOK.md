@@ -97,6 +97,30 @@ if OLMO not in sys.path:
     sys.path.insert(0, OLMO)
 ```
 
+If the repo already existed in Colab from an earlier attempt, update it now.
+The validation script changed after the first Colab runbook; a stale copy fails
+with a Hugging Face `Repo id must be in the form...` error instead of the
+clear checkpoint preflight.
+
+```python
+# PYTHON CELL
+%cd {PROJECT}
+
+if os.path.isdir(f"{PROJECT}/.git"):
+    !git pull
+else:
+    print("No .git directory found. If this folder was uploaded manually, re-upload the latest repo files.")
+
+from pathlib import Path
+validation_script = Path("scripts/06_local_validation.py").read_text()
+if "validate_checkpoint_dir" not in validation_script:
+    raise RuntimeError(
+        "scripts/06_local_validation.py is stale. Pull/re-upload the latest repo "
+        "before running Step 4."
+    )
+print("Validation script has checkpoint preflight.")
+```
+
 ---
 
 ## 2. Drive Layout
@@ -125,10 +149,31 @@ folders into `MyDrive/color-filter-ablation/assets/hf/`, then verify here:
 ```python
 # PYTHON CELL
 import os
+required = {
+    "config.json",
+    "pytorch_model.bin",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "special_tokens_map.json",
+}
+missing_any = False
 for name in ["books_marg_hf", "books_cond_hf"]:
     p = f"{DRIVE}/assets/hf/{name}"
-    print(name, "OK" if os.path.isdir(p) else "MISSING",
-          sorted(os.listdir(p)) if os.path.isdir(p) else "")
+    if not os.path.isdir(p):
+        print(name, "MISSING DIRECTORY:", p)
+        missing_any = True
+        continue
+    files = set(os.listdir(p))
+    missing = sorted(required - files)
+    print(name, "OK" if not missing else f"MISSING FILES: {missing}",
+          sorted(files))
+    missing_any = missing_any or bool(missing)
+
+if missing_any:
+    raise RuntimeError(
+        "Converted checkpoints are not ready. Upload assets/hf/books_marg_hf "
+        "and assets/hf/books_cond_hf to Drive, or run the fallback conversion below."
+    )
 ```
 
 <details>
@@ -189,6 +234,47 @@ cfg["paths"]["metrics_csv"] = f"{DRIVE}/results/metrics.csv"
 
 cfg_path.write_text(yaml.safe_dump(cfg, sort_keys=False))
 print(cfg_path.read_text())
+```
+
+Before Step 4, verify the patched config points at directories that actually
+exist in this Colab runtime:
+
+```python
+# PYTHON CELL
+from pathlib import Path
+import yaml
+
+cfg = yaml.safe_load(Path("configs/default.yaml").read_text())
+for key in ["marg_checkpoint", "cond_checkpoint"]:
+    p = Path(cfg["target"][key])
+    print(key, p, "exists=", p.is_dir())
+    if not p.is_dir():
+        raise FileNotFoundError(
+            f"{key} does not exist: {p}. Drive may not be mounted, or the "
+            "converted checkpoint folders are not under "
+            "MyDrive/color-filter-ablation/assets/hf/."
+        )
+```
+
+Also verify those directories are converted HF checkpoints, not raw OLMo
+checkpoint folders:
+
+```python
+# PYTHON CELL
+required = {"config.json", "pytorch_model.bin", "tokenizer.json",
+            "tokenizer_config.json", "special_tokens_map.json"}
+
+for key in ["marg_checkpoint", "cond_checkpoint"]:
+    p = Path(cfg["target"][key])
+    files = set(x.name for x in p.iterdir())
+    missing = sorted(required - files)
+    print(key, p)
+    print("present:", sorted(files))
+    if missing:
+        raise FileNotFoundError(
+            f"{key} is not a converted HF checkpoint. Missing: {missing}. "
+            "Run the fallback conversion in Step 3 or upload the local assets/hf folders."
+        )
 ```
 
 Equivalent YAML values:

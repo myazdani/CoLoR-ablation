@@ -28,6 +28,14 @@ GUTENBERG_URLS = [
     "https://www.gutenberg.org/files/84/84-0.txt",  # Frankenstein
 ]
 
+REQUIRED_CHECKPOINT_FILES = (
+    "config.json",
+    "pytorch_model.bin",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "special_tokens_map.json",
+)
+
 
 def set_local_caches() -> None:
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
@@ -41,12 +49,35 @@ def set_local_caches() -> None:
 
 
 def load_olmo_tokenizer(checkpoint_dir: str | Path, paper_code_path: str | Path):
+    checkpoint_path = validate_checkpoint_dir(checkpoint_dir, label="tokenizer checkpoint")
     paper_code = Path(paper_code_path).resolve()
     if str(paper_code) not in sys.path:
         sys.path.insert(0, str(paper_code))
     from hf_olmo.tokenization_olmo_fast import OLMoTokenizerFast
 
-    return OLMoTokenizerFast.from_pretrained(str(checkpoint_dir))
+    return OLMoTokenizerFast.from_pretrained(str(checkpoint_path))
+
+
+def validate_checkpoint_dir(checkpoint_dir: str | Path, *, label: str) -> Path:
+    path = Path(checkpoint_dir).expanduser()
+    if not path.is_dir():
+        raise FileNotFoundError(
+            f"{label} directory does not exist: {path}\n"
+            "In Colab this usually means Drive is not mounted, configs/default.yaml "
+            "points at the wrong Drive path, or the converted checkpoint folders "
+            "were not copied to MyDrive/color-filter-ablation/assets/hf/."
+        )
+    missing = [name for name in REQUIRED_CHECKPOINT_FILES if not (path / name).is_file()]
+    if missing:
+        present = sorted(p.name for p in path.iterdir())
+        raise FileNotFoundError(
+            f"{label} directory is missing required converted files: {missing}\n"
+            f"Directory: {path}\n"
+            f"Present files: {present}\n"
+            "Expected a converted HF checkpoint. If you only see model.pt/config.yaml, "
+            "run scripts/05_convert_olmo_to_hf.py first."
+        )
+    return path
 
 
 def strip_gutenberg_boilerplate(text: str) -> str:
@@ -203,6 +234,8 @@ def main() -> None:
     args = _resolve_args(parser.parse_args())
 
     set_local_caches()
+    validate_checkpoint_dir(args.cond_checkpoint, label="conditional checkpoint")
+    validate_checkpoint_dir(args.marg_checkpoint, label="marginal checkpoint")
     start = time.perf_counter()
     tokenizer = load_olmo_tokenizer(args.marg_checkpoint, args.paper_code)
     print(f"Tokenizer: {tokenizer.__class__.__name__}, eos={tokenizer.eos_token_id}, pad={tokenizer.pad_token_id}")

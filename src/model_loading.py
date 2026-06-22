@@ -6,6 +6,34 @@ from pathlib import Path
 import torch
 
 
+REQUIRED_HF_CHECKPOINT_FILES = (
+    "config.json",
+    "pytorch_model.bin",
+)
+
+
+def validate_hf_checkpoint_dir(checkpoint_path: str | Path) -> Path:
+    path = Path(checkpoint_path).expanduser()
+    if not path.is_dir():
+        raise FileNotFoundError(
+            f"Checkpoint directory does not exist: {path}\n"
+            "If this is running in Colab, verify Drive is mounted and "
+            "configs/default.yaml points to the converted checkpoint folder "
+            "under /content/drive/MyDrive/color-filter-ablation/assets/hf/."
+        )
+    missing = [name for name in REQUIRED_HF_CHECKPOINT_FILES if not (path / name).is_file()]
+    if missing:
+        present = sorted(p.name for p in path.iterdir())
+        raise FileNotFoundError(
+            f"Checkpoint directory is missing converted HF files: {missing}\n"
+            f"Directory: {path}\n"
+            f"Present files: {present}\n"
+            "Expected a converted checkpoint. If this folder only has "
+            "model.pt/config.yaml, run scripts/05_convert_olmo_to_hf.py first."
+        )
+    return path
+
+
 def register_local_olmo(paper_code_path: str | Path | None) -> None:
     if not paper_code_path:
         return
@@ -53,6 +81,7 @@ def load_causal_lm(
     dtype: str = "bf16",
 ):
     register_local_olmo(paper_code_path)
+    checkpoint_path = validate_hf_checkpoint_dir(checkpoint_path)
 
     kwargs = {}
     if dtype == "bf16":
