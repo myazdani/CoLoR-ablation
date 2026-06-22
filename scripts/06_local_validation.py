@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from src.ablation import apply_paired_ablation, find_block_module_list, variant_layer_indices
+from src.config import load_config
 from src.model_loading import load_causal_lm
 from src.scoring import score_pair
 
@@ -161,21 +162,45 @@ def format_summary(summary: dict[str, float]) -> str:
     return "\n".join(rows)
 
 
+def _resolve_args(args: argparse.Namespace) -> argparse.Namespace:
+    config = load_config(args.config) if args.config else {}
+    target = config.get("target", {})
+    paths = config.get("paths", {})
+    pool = config.get("pool", {})
+    scoring = config.get("scoring", {})
+
+    args.paper_code = args.paper_code or paths.get("paper_code") or "../color-filter-olmo"
+    args.cond_checkpoint = args.cond_checkpoint or target.get("cond_checkpoint") or "assets/hf/books_cond_hf"
+    args.marg_checkpoint = args.marg_checkpoint or target.get("marg_checkpoint") or "assets/hf/books_marg_hf"
+    args.sequence_length = args.sequence_length or int(pool.get("sequence_length", 512))
+    args.batch_size = args.batch_size or int(scoring.get("batch_size", 2))
+    args.device = args.device or scoring.get("device") or "cpu"
+    if args.dtype is None:
+        if args.device == "cuda" or (args.device == "auto" and torch.cuda.is_available()):
+            args.dtype = "bf16"
+        else:
+            args.dtype = "fp32"
+    return args
+
+
 def main() -> None:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(line_buffering=True)
-    parser = argparse.ArgumentParser(description="Run local CPU validation for converted CoLoR checkpoints.")
-    parser.add_argument("--paper-code", default="../color-filter-olmo")
-    parser.add_argument("--cond-checkpoint", default="assets/hf/books_cond_hf")
-    parser.add_argument("--marg-checkpoint", default="assets/hf/books_marg_hf")
+    parser = argparse.ArgumentParser(description="Validate converted CoLoR checkpoints.")
+    parser.add_argument("--config", default=None)
+    parser.add_argument("--paper-code", default=None)
+    parser.add_argument("--cond-checkpoint", default=None)
+    parser.add_argument("--marg-checkpoint", default=None)
     parser.add_argument("--n-per-domain", type=int, default=200)
-    parser.add_argument("--sequence-length", type=int, default=512)
-    parser.add_argument("--batch-size", type=int, default=2)
+    parser.add_argument("--sequence-length", type=int, default=None)
+    parser.add_argument("--batch-size", type=int, default=None)
+    parser.add_argument("--device", default=None)
+    parser.add_argument("--dtype", default=None, choices=["bf16", "fp16", "fp32", "auto"])
     parser.add_argument("--ablation-variant", default="top4")
     parser.add_argument("--c4-shuffle-buffer", type=int, default=1000)
     parser.add_argument("--seed", type=int, default=17)
     parser.add_argument("--report", default="reports/layer-ablated-color-filter/local_validation.md")
-    args = parser.parse_args()
+    args = _resolve_args(parser.parse_args())
 
     set_local_caches()
     start = time.perf_counter()
@@ -200,9 +225,9 @@ def main() -> None:
     labels = np.array(["gutenberg"] * len(gutenberg) + ["c4"] * len(c4))
     print(f"Packed pool shape={pool.shape}")
 
-    print("Loading converted models on CPU...")
-    cond = load_causal_lm(args.cond_checkpoint, paper_code_path=args.paper_code, dtype="fp32")
-    marg = load_causal_lm(args.marg_checkpoint, paper_code_path=args.paper_code, dtype="fp32")
+    print(f"Loading converted models; scoring device={args.device}, dtype={args.dtype}...")
+    cond = load_causal_lm(args.cond_checkpoint, paper_code_path=args.paper_code, dtype=args.dtype)
+    marg = load_causal_lm(args.marg_checkpoint, paper_code_path=args.paper_code, dtype=args.dtype)
     cond_path, cond_blocks = find_block_module_list(cond)
     marg_path, marg_blocks = find_block_module_list(marg)
     if cond_path != marg_path:
@@ -215,14 +240,14 @@ def main() -> None:
     print("Module tree preview:")
     print("\n".join(tree.splitlines()[:80]))
 
-    print("Scoring full models on CPU...")
+    print(f"Scoring full models on {args.device}...")
     full_scores, full_stats = score_pair(
         cond,
         marg,
         pool,
         batch_size=args.batch_size,
-        device="cpu",
-        dtype="fp32",
+        device=args.device,
+        dtype=args.dtype,
     )
     for col in ("nll_cond", "nll_marg", "color"):
         if not np.isfinite(full_scores[col]).all():
@@ -244,8 +269,8 @@ def main() -> None:
         marg,
         pool[:8],
         batch_size=min(args.batch_size, 8),
-        device="cpu",
-        dtype="fp32",
+        device=args.device,
+        dtype=args.dtype,
     )
     for col in ("nll_cond", "nll_marg", "color"):
         if not np.isfinite(ablated_scores[col]).all():
@@ -267,6 +292,8 @@ def main() -> None:
 - Sequence length: {args.sequence_length}
 - Domain sequences: {args.n_per_domain} Gutenberg-ish, {args.n_per_domain} C4
 - Full scoring batch size: {args.batch_size}
+- Scoring device: `{args.device}`
+- Dtype: `{args.dtype}`
 - Elapsed seconds: {elapsed:.2f}
 
 ## Module Tree
