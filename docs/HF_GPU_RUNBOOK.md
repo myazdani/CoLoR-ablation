@@ -105,6 +105,23 @@ restart the runtime before continuing:
 # Runtime -> Restart runtime, then rerun this runbook from Step 0.
 ```
 
+After installing, verify the paper fork's import-time dependencies are present:
+
+```python
+# PYTHON CELL
+import boto3, botocore, rich, cached_path, omegaconf
+print("paper-fork import deps OK")
+```
+
+If you previously hit `ModuleNotFoundError: No module named 'boto3'`, pull the
+latest repo and rerun the install cell above. To patch the current runtime
+without restarting:
+
+```python
+# PYTHON CELL
+!pip install -q --no-deps boto3 botocore s3transfer jmespath rich google-cloud-storage google-api-core google-auth google-resumable-media google-crc32c google-cloud-core googleapis-common-protos proto-plus
+```
+
 Make the pinned fork importable in *this* Python session (needed for scoring,
 not just conversion, because `model_loading.py` forces the fork's
 `OLMoForCausalLM`):

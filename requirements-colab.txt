@@ -15,6 +15,21 @@ antlr4-python3-runtime==4.9.3
 omegaconf==2.3.0
 cached_path==1.8.10
 
+# Import-time dependencies of the pinned color-filter-olmo fork.
+boto3
+botocore
+s3transfer
+jmespath
+rich
+google-cloud-storage
+google-api-core
+google-auth
+google-resumable-media
+google-crc32c
+google-cloud-core
+googleapis-common-protos
+proto-plus
+
 datasets
 dill
 multiprocess
