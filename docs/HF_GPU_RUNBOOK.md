@@ -63,27 +63,55 @@ os.environ["HF_TOKEN"] = userdata.get("HF_TOKEN")  # hub client reads this autom
 Pin the paper fork to the exact commit the local validation was run against.
 `src/model_loading.py` patches the fork's untied output head (`ff_out` →
 `ff_out_last`); an unpinned `main` could drift and break that patch silently.
+Use Python `subprocess.run(..., check=True)` for clone/checkout. Colab `!git ...`
+prints failures but does not reliably stop a Python cell.
 
 ```python
 # PYTHON CELL
 import os
+import subprocess
+import sys
+from pathlib import Path
 
 PROJECT = "/content/CoLoR-ablation"
 OLMO = "/content/color-filter-olmo"
+OLMO_REPO = "https://github.com/myazdani/color-filter-olmo.git"
 OLMO_SHA = "3e0424c8cc6c53aaad70d3a3dea3fd683658cdd4"
 
-# This repo. If you uploaded the repo folder manually and it already exists,
-# this clone step is skipped.
-if not os.path.isdir(PROJECT):
-    !git clone https://github.com/myazdani/CoLoR-ablation.git {PROJECT}
+def run(*args):
+    subprocess.run([str(arg) for arg in args], check=True)
 
-# Paper fork, pinned.
-if not os.path.isdir(OLMO):
-    !git clone https://github.com/davidbrandfonbrener/color-filter-olmo.git {OLMO}
-!git -C {OLMO} checkout {OLMO_SHA}
+def out(*args):
+    return subprocess.check_output([str(arg) for arg in args], text=True).strip()
+
+project = Path(PROJECT)
+olmo = Path(OLMO)
+
+# This repo.
+if not project.exists():
+    run("git", "clone", "https://github.com/myazdani/CoLoR-ablation.git", PROJECT)
+elif (project / ".git").is_dir():
+    run("git", "-C", PROJECT, "pull", "--ff-only")
+else:
+    raise RuntimeError(f"{PROJECT} exists but is not a git checkout")
+
+# Paper fork, pinned. This SHA is from myazdani/color-filter-olmo
+# branch uncertainty-color; cloning upstream davidbrandfonbrener/color-filter-olmo
+# and checking out this SHA fails.
+if not olmo.exists():
+    run("git", "clone", OLMO_REPO, OLMO)
+elif not (olmo / ".git").is_dir():
+    raise RuntimeError(f"{OLMO} exists but is not a git checkout")
+run("git", "-C", OLMO, "fetch", "origin")
+run("git", "-C", OLMO, "checkout", OLMO_SHA)
+actual_olmo_sha = out("git", "-C", OLMO, "rev-parse", "HEAD")
+if actual_olmo_sha != OLMO_SHA:
+    raise RuntimeError(f"OLMo SHA mismatch: expected {OLMO_SHA}, got {actual_olmo_sha}")
 
 %cd {PROJECT}
-!pip install -q --no-deps -r requirements-colab.txt
+run(sys.executable, "-m", "pip", "install", "-q", "--no-deps", "-r", "requirements-colab.txt")
+print("project sha:", out("git", "-C", PROJECT, "rev-parse", "HEAD"))
+print("olmo sha:", actual_olmo_sha)
 ```
 
 Do **not** run `pip install -r requirements.txt` in Colab. That file is for the
