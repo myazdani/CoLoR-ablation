@@ -10,6 +10,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import torch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -43,6 +44,20 @@ def file_sha256(path: str | Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def checkpoint_sha256(checkpoint_path: str | Path) -> str:
+    path = Path(checkpoint_path)
+    files = [
+        path / "config.json",
+        path / "pytorch_model.bin",
+    ]
+    payload = {
+        file.name: file_sha256(file)
+        for file in files
+        if file.exists()
+    }
+    return json_hash(payload)
 
 
 def json_hash(value: object) -> str:
@@ -84,6 +99,13 @@ def annotate_scores(
     git_sha: str,
     config_sha: str,
     token_pool_sha: str,
+    cond_checkpoint: str,
+    marg_checkpoint: str,
+    cond_checkpoint_sha: str,
+    marg_checkpoint_sha: str,
+    torch_version: str,
+    cuda_version: str,
+    cuda_device_name: str,
     stats: dict[str, float],
     shard_start: int,
     shard_end: int,
@@ -110,6 +132,13 @@ def annotate_scores(
     merged["git_commit"] = git_sha
     merged["config_sha256"] = config_sha
     merged["token_pool_sha256"] = token_pool_sha
+    merged["cond_checkpoint"] = str(cond_checkpoint)
+    merged["marg_checkpoint"] = str(marg_checkpoint)
+    merged["cond_checkpoint_sha256"] = cond_checkpoint_sha
+    merged["marg_checkpoint_sha256"] = marg_checkpoint_sha
+    merged["torch_version"] = torch_version
+    merged["cuda_version"] = cuda_version
+    merged["cuda_device_name"] = cuda_device_name
     merged["shard_start"] = shard_start
     merged["shard_end"] = shard_end
     for key, value in stats.items():
@@ -194,6 +223,13 @@ def main() -> None:
     git_sha = git_commit()
     config_sha = json_hash(config)
     token_pool_sha = file_sha256(tokens_path)
+    cond_checkpoint = str(target["cond_checkpoint"])
+    marg_checkpoint = str(target["marg_checkpoint"])
+    cond_checkpoint_sha = checkpoint_sha256(cond_checkpoint)
+    marg_checkpoint_sha = checkpoint_sha256(marg_checkpoint)
+    torch_version = torch.__version__
+    cuda_version = torch.version.cuda or ""
+    cuda_device_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else ""
 
     output_path = Path(args.output) if args.output else Path(paths["output_dir"]) / f"scores_{args.variant}.parquet"
     output_path = ensure_parent(output_path)
@@ -235,6 +271,13 @@ def main() -> None:
             git_sha=git_sha,
             config_sha=config_sha,
             token_pool_sha=token_pool_sha,
+            cond_checkpoint=cond_checkpoint,
+            marg_checkpoint=marg_checkpoint,
+            cond_checkpoint_sha=cond_checkpoint_sha,
+            marg_checkpoint_sha=marg_checkpoint_sha,
+            torch_version=torch_version,
+            cuda_version=cuda_version,
+            cuda_device_name=cuda_device_name,
             stats=shard_stats,
             shard_start=shard_start,
             shard_end=shard_end,
