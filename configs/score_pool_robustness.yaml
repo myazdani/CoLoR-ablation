@@ -16,14 +16,17 @@ target:
 
 token_recovery:
   mode: exact_from_hf_full_data
+  index_source: csv_sidecar
   hf_repo: hlzhang109/CoLoR-filter
   remote_prefix: full_data/c4
   local_cache_dir: data/token_cache
   recovered_tokens: data/score_pool_tokens.npy
   recovered_meta: data/score_pool_meta.parquet
   recovery_plan: results/score-pool-robustness/token_recovery_plan.json
+  recovery_locations: results/score-pool-robustness/token_recovery_locations.csv
   memmap_dtype: uint16
   sequence_length: 512
+  pad_token_id: 1
   max_download_gb_without_confirmation: 25
 
 scoring:

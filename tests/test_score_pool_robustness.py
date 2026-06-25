@@ -189,3 +189,60 @@ def test_token_recovery_plan_helpers(tmp_path) -> None:
     assert total_chunks == 20
     assert [item.path for item in needed] == ["full_data/c4/a.npy", "full_data/c4/b.npy"]
     assert [item.needed_rows for item in needed] == [2, 2]
+
+
+def test_doc_location_recovery_pads_and_truncates(tmp_path, monkeypatch) -> None:
+    script_path = __import__("pathlib").Path(__file__).resolve().parents[1] / "scripts" / "09_recover_score_pool_tokens.py"
+    spec = importlib.util.spec_from_file_location("recover_script_doc_locations", script_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["recover_script_doc_locations"] = module
+    spec.loader.exec_module(module)
+
+    token_path = tmp_path / "tokens.npy"
+    np.arange(20, dtype=np.uint16).tofile(token_path)
+    sample_meta = pd.DataFrame(
+        {
+            "seq_idx": [0, 1],
+            "pool_name": ["a", "b"],
+            "c4_index": [10, 11],
+        }
+    )
+    locations = pd.DataFrame(
+        {
+            "c4_index": [10, 11],
+            "token_path": ["full_data/c4/a.npy", "full_data/c4/a.npy"],
+            "sidecar_path": ["full_data/c4/a.csv.gz", "full_data/c4/a.csv.gz"],
+            "token_start": [2, 4],
+            "token_end": [5, 12],
+            "source_path": ["raw-a", "raw-a"],
+            "source_row": [10, 11],
+        }
+    )
+    output_tokens = tmp_path / "recovered.npy"
+    output_meta = tmp_path / "recovered.parquet"
+    captured_meta = {}
+
+    def fake_to_parquet(self, path, index=False):
+        captured_meta["frame"] = self.copy()
+        captured_meta["path"] = path
+        captured_meta["index"] = index
+
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", fake_to_parquet)
+
+    module.recover_tokens_from_doc_locations(
+        sample_meta=sample_meta,
+        locations=locations,
+        local_paths={"full_data/c4/a.npy": token_path},
+        output_tokens=output_tokens,
+        output_meta=output_meta,
+        dtype=np.dtype(np.uint16),
+        sequence_length=5,
+        pad_token_id=1,
+    )
+
+    recovered = np.load(output_tokens)
+    meta = captured_meta["frame"]
+    assert recovered.tolist() == [[2, 3, 4, 1, 1], [4, 5, 6, 7, 8]]
+    assert meta["was_padded"].tolist() == [True, False]
+    assert meta["was_truncated"].tolist() == [False, True]

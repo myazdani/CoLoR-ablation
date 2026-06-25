@@ -31,7 +31,7 @@ python -m pytest
 Result:
 
 ```text
-13 passed, 1 skipped
+14 passed, 1 skipped
 ```
 
 ## Exact Token Recovery Preflight
@@ -49,7 +49,7 @@ Output plan:
 results/score-pool-robustness/token_recovery_plan.json
 ```
 
-Key facts from the plan:
+Initial key facts from the fixed-chunk plan:
 
 ```text
 sample rows: 500,000
@@ -61,17 +61,66 @@ max requested c4_index: 339,236,143
 index coverage ok: False
 ```
 
+Initial interpretation:
+
+Treating the visible `*.npy` token files as contiguous fixed 512-token chunks
+does not cover the sampled C4 index range. The sampled score indices go up to
+about `339M`, but the visible token files only infer about `50M` 512-token
+chunks under that convention.
+
+## CSV Sidecar Recovery Attempt
+
+The visible `full_data/c4` release also contains `part-*.csv.gz` sidecars. These
+sidecars map C4 document ids to token offsets in the raw `part-*.npy` token
+streams. The recovery script was updated to support this mapping via:
+
+```yaml
+token_recovery:
+  index_source: csv_sidecar
+  recovery_locations: results/score-pool-robustness/token_recovery_locations.csv
+```
+
+Command:
+
+```bash
+python scripts/09_recover_score_pool_tokens.py \
+  --config configs/score_pool_robustness.yaml \
+  --force-rebuild-locations
+```
+
+Key facts from the sidecar plan:
+
+```text
+sample rows: 500,000
+unique c4 indices: 496,205
+sidecar matched c4 indices: 6,398
+index coverage ok: False
+remote sidecar files visible: 25
+remote sidecar bytes visible: 1.51 GiB
+remote token files visible: 25
+remote token bytes visible: 47.69 GiB
+needed token files for matched subset: 2
+needed token bytes for matched subset: 3.82 GiB
+```
+
+Sidecar artifacts:
+
+```text
+results/score-pool-robustness/token_recovery_plan.json
+results/score-pool-robustness/token_recovery_locations.csv
+```
+
 Interpretation:
 
-The currently visible `hlzhang109/CoLoR-filter/full_data/c4` tree does not cover
-the sampled C4 index range needed for exact recovery of the five existing pools.
-The sampled score indices go up to about `339M`, but the visible token files
-only infer about `50M` 512-token chunks under the upstream `MemMapDataset`
-convention.
+The CSV-sidecar mapping confirms that the official `c4_index` values are
+document ids for at least part of the release, but the public `full_data/c4`
+tree only matches `6,398 / 496,205` unique sampled ids. Therefore the currently
+visible HF files still cannot recover the exact five 100K official sampled
+pools.
 
 Therefore exact recovery of the existing five official sampled pools cannot
 proceed from the currently visible HF token tree without locating additional
-tokenized C4 shards or confirming a different index mapping.
+tokenized C4 sidecars/shards or confirming another missing index mapping.
 
 ## Local Asset Status
 

@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import argparse
+import csv
+import gzip
 import json
 import os
 import sys
@@ -35,6 +37,18 @@ class NeededFile:
     chunk_start: int
     chunk_end: int
     needed_rows: int
+
+
+@dataclass(frozen=True)
+class DocLocation:
+    c4_index: int
+    token_path: str
+    token_size: int
+    sidecar_path: str
+    token_start: int
+    token_end: int
+    source_path: str
+    source_row: int
 
 
 def log(message: str) -> None:
@@ -96,6 +110,127 @@ def token_files_from_remote(files: list[RemoteFile]) -> list[RemoteFile]:
     if not token_files:
         raise RuntimeError("No candidate token .npy files found under remote prefix")
     return token_files
+
+
+def sidecar_files_from_remote(files: list[RemoteFile]) -> list[RemoteFile]:
+    sidecars = [remote for remote in files if remote.path.endswith(".csv.gz")]
+    sidecars.sort(key=lambda remote: remote.path)
+    return sidecars
+
+
+def pair_token_and_sidecar_files(
+    token_files: list[RemoteFile],
+    sidecar_files: list[RemoteFile],
+) -> list[tuple[RemoteFile, RemoteFile]]:
+    token_by_stem = {Path(remote.path).name.removesuffix(".npy"): remote for remote in token_files}
+    pairs: list[tuple[RemoteFile, RemoteFile]] = []
+    for sidecar in sidecar_files:
+        stem = Path(sidecar.path).name.removesuffix(".csv.gz")
+        token = token_by_stem.get(stem)
+        if token is not None:
+            pairs.append((token, sidecar))
+    if not pairs:
+        raise RuntimeError("No matching .npy/.csv.gz token sidecar pairs found")
+    return pairs
+
+
+def hf_resolve_url(repo_id: str, path: str) -> str:
+    quoted_repo = urllib.parse.quote(repo_id, safe="/")
+    quoted_path = urllib.parse.quote(path, safe="/")
+    return f"https://huggingface.co/{quoted_repo}/resolve/main/{quoted_path}"
+
+
+def read_location_cache(path: Path) -> pd.DataFrame:
+    if path.suffix == ".csv":
+        return pd.read_csv(path)
+    return pd.read_parquet(path)
+
+
+def write_location_cache(frame: pd.DataFrame, path: Path) -> None:
+    path = ensure_parent(path)
+    if path.suffix == ".csv":
+        frame.to_csv(path, index=False)
+    else:
+        frame.to_parquet(path, index=False)
+
+
+def iter_sidecar_locations(
+    *,
+    repo_id: str,
+    token_file: RemoteFile,
+    sidecar_file: RemoteFile,
+    requested: set[int],
+) -> list[DocLocation]:
+    locations: list[DocLocation] = []
+    request = urllib.request.Request(hf_resolve_url(repo_id, sidecar_file.path))
+    with urllib.request.urlopen(request, timeout=120) as response:
+        with gzip.GzipFile(fileobj=response) as gzip_file:
+            text = (line.decode("utf-8") for line in gzip_file)
+            reader = csv.reader(text)
+            for row in reader:
+                if len(row) < 5:
+                    continue
+                try:
+                    c4_index = int(row[4])
+                except ValueError:
+                    continue
+                if c4_index not in requested:
+                    continue
+                locations.append(
+                    DocLocation(
+                        c4_index=c4_index,
+                        token_path=token_file.path,
+                        token_size=token_file.size,
+                        sidecar_path=sidecar_file.path,
+                        token_start=int(row[0]),
+                        token_end=int(row[1]),
+                        source_path=row[3],
+                        source_row=c4_index,
+                    )
+                )
+    return locations
+
+
+def build_doc_location_plan(
+    *,
+    repo_id: str,
+    c4_indices: np.ndarray,
+    token_files: list[RemoteFile],
+    sidecar_files: list[RemoteFile],
+    locations_path: Path,
+    force_rebuild: bool = False,
+) -> pd.DataFrame:
+    requested = set(int(value) for value in np.unique(c4_indices.astype(np.int64)))
+    if locations_path.exists() and not force_rebuild:
+        frame = read_location_cache(locations_path)
+        found = set(int(value) for value in frame["c4_index"].to_numpy(dtype=np.int64))
+        if requested.issubset(found):
+            return frame[frame["c4_index"].isin(requested)].copy()
+        log(
+            f"Cached sidecar locations cover {len(found):,}/{len(requested):,} requested ids; rebuilding."
+        )
+
+    pairs = pair_token_and_sidecar_files(token_files, sidecar_files)
+    found: dict[int, DocLocation] = {}
+    for token_file, sidecar_file in pairs:
+        remaining = requested - set(found)
+        if not remaining:
+            break
+        log(
+            f"scanning {sidecar_file.path} ({sidecar_file.size / 1024**2:.1f} MiB); "
+            f"found {len(found):,}/{len(requested):,}"
+        )
+        for location in iter_sidecar_locations(
+            repo_id=repo_id,
+            token_file=token_file,
+            sidecar_file=sidecar_file,
+            requested=remaining,
+        ):
+            found[location.c4_index] = location
+
+    frame = pd.DataFrame([asdict(location) for location in found.values()])
+    write_location_cache(frame, locations_path)
+    return frame
 
 
 def build_needed_file_plan(
@@ -188,6 +323,75 @@ def write_plan(
     return plan
 
 
+def write_doc_plan(
+    *,
+    output_path: Path,
+    repo_id: str,
+    remote_prefix: str,
+    dtype: np.dtype,
+    sequence_length: int,
+    sample_rows: int,
+    unique_c4_indices: int,
+    max_c4_index: int,
+    token_files: list[RemoteFile],
+    sidecar_files: list[RemoteFile],
+    locations: pd.DataFrame,
+) -> dict[str, Any]:
+    found_unique = int(locations["c4_index"].nunique()) if len(locations) else 0
+    needed_paths = set(locations["token_path"].astype(str)) if len(locations) else set()
+    token_by_path = {remote.path: remote for remote in token_files}
+    sidecar_by_path = {remote.path: remote for remote in sidecar_files}
+    needed_token_files = [token_by_path[path] for path in sorted(needed_paths)]
+    needed_sidecar_paths = set(locations["sidecar_path"].astype(str)) if len(locations) else set()
+    needed_sidecars = [sidecar_by_path[path] for path in sorted(needed_sidecar_paths)]
+    plan = {
+        "repo_id": repo_id,
+        "remote_prefix": remote_prefix,
+        "memmap_dtype": str(dtype),
+        "sequence_length": sequence_length,
+        "sample_rows": sample_rows,
+        "unique_c4_indices": unique_c4_indices,
+        "max_c4_index": max_c4_index,
+        "total_remote_token_files": len(token_files),
+        "total_remote_token_bytes": sum(remote.size for remote in token_files),
+        "total_remote_sidecar_files": len(sidecar_files),
+        "total_remote_sidecar_bytes": sum(remote.size for remote in sidecar_files),
+        "found_unique_c4_indices": found_unique,
+        "index_coverage_ok": found_unique == unique_c4_indices,
+        "needed_files": [
+            {
+                "path": remote.path,
+                "size": remote.size,
+                "needed_rows": int((locations["token_path"] == remote.path).sum()),
+            }
+            for remote in needed_token_files
+        ],
+        "needed_file_count": len(needed_token_files),
+        "total_needed_bytes": sum(remote.size for remote in needed_token_files),
+        "total_needed_gib": sum(remote.size for remote in needed_token_files) / 1024**3,
+        "needed_sidecar_files": [
+            {
+                "path": remote.path,
+                "size": remote.size,
+                "matched_rows": int((locations["sidecar_path"] == remote.path).sum()),
+            }
+            for remote in needed_sidecars
+        ],
+        "needed_sidecar_file_count": len(needed_sidecars),
+        "total_needed_sidecar_bytes": sum(remote.size for remote in needed_sidecars),
+        "total_needed_sidecar_gib": sum(remote.size for remote in needed_sidecars) / 1024**3,
+        "index_basis": "c4_index_csv_sidecar_doc_id",
+        "notes": [
+            "c4_index values match document ids in the full_data/c4 CSV sidecars.",
+            "Token recovery reads the document token span from the matching raw token stream.",
+            "Documents longer than sequence_length are right-truncated; shorter documents are right-padded.",
+        ],
+    }
+    output_path = ensure_parent(output_path)
+    output_path.write_text(json.dumps(plan, indent=2) + "\n")
+    return plan
+
+
 def download_needed_files(
     *,
     repo_id: str,
@@ -211,6 +415,27 @@ def download_needed_files(
         )
         resolved[item.path] = Path(path)
     return resolved
+
+
+def download_needed_token_files(
+    *,
+    repo_id: str,
+    needed_paths: list[str],
+    token_files: list[RemoteFile],
+    cache_dir: Path,
+) -> dict[str, Path]:
+    token_by_path = {remote.path: remote for remote in token_files}
+    needed = [
+        NeededFile(
+            path=path,
+            size=token_by_path[path].size,
+            chunk_start=0,
+            chunk_end=0,
+            needed_rows=0,
+        )
+        for path in needed_paths
+    ]
+    return download_needed_files(repo_id=repo_id, needed=needed, cache_dir=cache_dir)
 
 
 def recover_tokens(
@@ -251,6 +476,65 @@ def recover_tokens(
     sample_meta.to_parquet(output_meta, index=False)
 
 
+def recover_tokens_from_doc_locations(
+    *,
+    sample_meta: pd.DataFrame,
+    locations: pd.DataFrame,
+    local_paths: Mapping[str, Path],
+    output_tokens: Path,
+    output_meta: Path,
+    dtype: np.dtype,
+    sequence_length: int,
+    pad_token_id: int,
+) -> None:
+    location_cols = [
+        "c4_index",
+        "token_path",
+        "sidecar_path",
+        "token_start",
+        "token_end",
+        "source_path",
+        "source_row",
+    ]
+    row_meta = sample_meta.merge(
+        locations[location_cols],
+        on="c4_index",
+        how="left",
+        validate="many_to_one",
+    )
+    if row_meta["token_path"].isna().any():
+        missing = int(row_meta["token_path"].isna().sum())
+        raise RuntimeError(f"Missing sidecar token locations for {missing} sampled rows")
+
+    tokens = np.lib.format.open_memmap(
+        output_tokens,
+        mode="w+",
+        dtype=np.int32,
+        shape=(len(row_meta), sequence_length),
+    )
+    tokens[:] = pad_token_id
+    row_meta["token_length"] = row_meta["token_end"].astype(np.int64) - row_meta["token_start"].astype(np.int64)
+    row_meta["was_truncated"] = row_meta["token_length"] > sequence_length
+    row_meta["was_padded"] = row_meta["token_length"] < sequence_length
+
+    for token_path, group in row_meta.groupby("token_path", sort=True):
+        local_path = local_paths[str(token_path)]
+        values = local_path.stat().st_size // dtype.itemsize
+        mmap = np.memmap(local_path, dtype=dtype, mode="r", shape=(values,))
+        log(f"recovering {len(group):,} rows from {token_path}")
+        for output_pos, start, end in zip(
+            group.index.to_numpy(dtype=np.int64),
+            group["token_start"].to_numpy(dtype=np.int64),
+            group["token_end"].to_numpy(dtype=np.int64),
+        ):
+            stop = min(int(end), int(start) + sequence_length)
+            doc_tokens = np.asarray(mmap[int(start) : stop], dtype=np.int32)
+            tokens[int(output_pos), : len(doc_tokens)] = doc_tokens
+    tokens.flush()
+    output_meta.parent.mkdir(parents=True, exist_ok=True)
+    row_meta.to_parquet(output_meta, index=False)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Preflight and optionally recover exact token sequences for score-pool samples."
@@ -262,6 +546,11 @@ def main() -> None:
         action="store_true",
         help="Allow downloads larger than max_download_gb_without_confirmation.",
     )
+    parser.add_argument(
+        "--force-rebuild-locations",
+        action="store_true",
+        help="Re-scan CSV sidecars even if a cached location parquet exists.",
+    )
     args = parser.parse_args()
 
     config = load_config(args.config)
@@ -272,17 +561,88 @@ def main() -> None:
     sequence_length = int(token_cfg.get("sequence_length", config["target"]["sequence_length"]))
     repo_id = token_cfg["hf_repo"]
     remote_prefix = token_cfg["remote_prefix"]
+    index_source = str(token_cfg.get("index_source", "contiguous_token_chunks"))
+    locations_path = Path(token_cfg.get("recovery_locations", "results/score-pool-robustness/token_recovery_locations.parquet"))
 
     log(f"loading remote tree: {repo_id}/{remote_prefix}")
     remote_files = list_remote_files(repo_id, remote_prefix, recursive=True)
     token_files = token_files_from_remote(remote_files)
+    sidecar_files = sidecar_files_from_remote(remote_files)
+    c4_values = sample_meta["c4_index"].to_numpy(dtype=np.int64)
+    if index_source == "csv_sidecar":
+        locations = build_doc_location_plan(
+            repo_id=repo_id,
+            c4_indices=c4_values,
+            token_files=token_files,
+            sidecar_files=sidecar_files,
+            locations_path=locations_path,
+            force_rebuild=args.force_rebuild_locations,
+        )
+        plan = write_doc_plan(
+            output_path=Path(token_cfg["recovery_plan"]),
+            repo_id=repo_id,
+            remote_prefix=remote_prefix,
+            dtype=dtype,
+            sequence_length=sequence_length,
+            sample_rows=len(sample_meta),
+            unique_c4_indices=int(sample_meta["c4_index"].nunique()),
+            max_c4_index=int(c4_values.max()) if len(c4_values) else -1,
+            token_files=token_files,
+            sidecar_files=sidecar_files,
+            locations=locations,
+        )
+        log(f"sample rows: {plan['sample_rows']:,}")
+        log(f"unique c4 indices: {plan['unique_c4_indices']:,}")
+        log(f"sidecar matched c4 indices: {plan['found_unique_c4_indices']:,}")
+        log(f"index coverage ok: {plan['index_coverage_ok']}")
+        log(f"needed token files: {plan['needed_file_count']:,}")
+        log(f"needed token bytes: {plan['total_needed_gib']:.2f} GiB")
+        log(f"matched sidecar bytes: {plan['total_needed_sidecar_gib']:.2f} GiB")
+        log(f"wrote plan: {token_cfg['recovery_plan']}")
+        log(f"wrote locations: {locations_path}")
+
+        max_gb = float(token_cfg.get("max_download_gb_without_confirmation", 25))
+        if not args.download:
+            log("preflight only; rerun with --download to recover tokens")
+            return
+        if not plan["index_coverage_ok"]:
+            missing = plan["unique_c4_indices"] - plan["found_unique_c4_indices"]
+            raise SystemExit(f"Exact recovery cannot proceed: missing {missing:,} c4 ids from CSV sidecars.")
+        if plan["total_needed_gib"] > max_gb and not args.allow_large_download:
+            raise SystemExit(
+                f"Required token shard download is {plan['total_needed_gib']:.2f} GiB, "
+                f"above configured cap {max_gb:.2f} GiB. Rerun with --allow-large-download "
+                "only after confirming disk/Colab Drive capacity."
+            )
+        cache_dir = Path(token_cfg["local_cache_dir"])
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        needed_paths = [item["path"] for item in plan["needed_files"]]
+        local_paths = download_needed_token_files(
+            repo_id=repo_id,
+            needed_paths=needed_paths,
+            token_files=token_files,
+            cache_dir=cache_dir,
+        )
+        recover_tokens_from_doc_locations(
+            sample_meta=sample_meta,
+            locations=locations,
+            local_paths=local_paths,
+            output_tokens=Path(token_cfg["recovered_tokens"]),
+            output_meta=Path(token_cfg["recovered_meta"]),
+            dtype=dtype,
+            sequence_length=sequence_length,
+            pad_token_id=int(token_cfg.get("pad_token_id", 1)),
+        )
+        log(f"wrote tokens: {token_cfg['recovered_tokens']}")
+        log(f"wrote metadata: {token_cfg['recovered_meta']}")
+        return
+
     needed, total_chunks = build_needed_file_plan(
         c4_indices=sample_meta["c4_index"].to_numpy(dtype=np.int64),
         token_files=token_files,
         dtype=dtype,
         sequence_length=sequence_length,
     )
-    c4_values = sample_meta["c4_index"].to_numpy(dtype=np.int64)
     plan = write_plan(
         output_path=Path(token_cfg["recovery_plan"]),
         repo_id=repo_id,
