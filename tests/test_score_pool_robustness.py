@@ -1,0 +1,191 @@
+from __future__ import annotations
+
+import copy
+import importlib.util
+import sys
+from types import SimpleNamespace
+
+import numpy as np
+import pandas as pd
+import pytest
+import torch
+from torch import nn
+
+from src.ablation import apply_dual_ablation, find_block_module_list
+from src.score_pool_robustness import (
+    average_precision_from_scores,
+    compute_pairwise_metrics,
+    default_variant_specs,
+    load_pool_samples,
+    roc_auc_from_scores,
+)
+
+
+class TinyBlock(nn.Module):
+    def __init__(self, layer_id: int):
+        super().__init__()
+        self.layer_id = layer_id
+        self.linear = nn.Linear(4, 4)
+
+    def forward(self, x):
+        return self.linear(x)
+
+
+class TinyModel(nn.Module):
+    def __init__(self, layers: int = 6):
+        super().__init__()
+        self.config = SimpleNamespace(n_layers=layers, num_hidden_layers=layers)
+        self.transformer = nn.Module()
+        self.transformer.blocks = nn.ModuleList([TinyBlock(i) for i in range(layers)])
+
+
+def test_apply_dual_ablation_allows_asymmetric_layer_sets() -> None:
+    cond = TinyModel(layers=6)
+    marg = copy.deepcopy(cond)
+
+    cond_record, marg_record = apply_dual_ablation(
+        cond,
+        marg,
+        cond_removed_layers=(4, 5),
+        marg_removed_layers=(0, 1),
+        total_layers=6,
+    )
+
+    assert cond_record.removed_layers == (4, 5)
+    assert marg_record.removed_layers == (0, 1)
+    assert cond_record.kept_num_layers == 4
+    assert marg_record.kept_num_layers == 4
+    _, cond_blocks = find_block_module_list(cond)
+    _, marg_blocks = find_block_module_list(marg)
+    assert [block.layer_id for block in cond_blocks] == [0, 1, 2, 3]
+    assert [block.layer_id for block in marg_blocks] == [2, 3, 4, 5]
+
+
+def test_default_score_pool_variant_specs_cover_expected_grid() -> None:
+    specs = default_variant_specs(total_layers=12)
+
+    assert specs["cond_top4_marg_bot4"].cond_removed_layers == (8, 9, 10, 11)
+    assert specs["cond_top4_marg_bot4"].marg_removed_layers == (0, 1, 2, 3)
+    assert specs["cond_bot2_marg_top2"].cond_removed_layers == (0, 1)
+    assert specs["cond_bot2_marg_top2"].marg_removed_layers == (10, 11)
+    assert specs["cond_top6_only"].marg_removed_layers == ()
+    assert specs["marg_top6_only"].cond_removed_layers == ()
+
+
+def _write_pool_npz(path, *, offset: int) -> None:
+    n = 3
+    np.savez_compressed(
+        path,
+        row_position=np.arange(offset, offset + n, dtype=np.int64),
+        c4_index=np.arange(1000 + offset, 1000 + offset + n, dtype=np.int64),
+        prior_score=np.linspace(3.0, 3.2, n, dtype=np.float32),
+        conditional_books_score=np.linspace(3.4, 3.6, n, dtype=np.float32),
+        color_score=np.linspace(0.4, 0.6, n, dtype=np.float32),
+    )
+
+
+def test_load_pool_samples_reads_existing_npz_shape(tmp_path) -> None:
+    filenames = {
+        "random_positive_samples.npz",
+        "hard_positive_samples.npz",
+        "random_negative_samples.npz",
+        "hard_negative_samples.npz",
+        "tail_negative_samples.npz",
+    }
+    for i, filename in enumerate(sorted(filenames)):
+        _write_pool_npz(tmp_path / filename, offset=i * 10)
+
+    frame = load_pool_samples(tmp_path)
+
+    assert len(frame) == 15
+    assert set(frame["pool_name"]) == {
+        "random_positive",
+        "hard_positive",
+        "random_negative",
+        "hard_negative",
+        "tail_negative",
+    }
+    assert {"full_prior_score", "full_conditional_books_score", "full_color_score"}.issubset(
+        frame.columns
+    )
+    assert frame["seq_idx"].tolist() == list(range(15))
+
+
+def _metric_frame() -> pd.DataFrame:
+    rows = []
+    values = {
+        "hard_positive": [0.20, 0.21, 0.22, 0.23],
+        "hard_negative": [0.24, 0.25, 0.26, 0.27],
+        "random_negative": [0.35, 0.36, 0.37, 0.38],
+        "tail_negative": [0.70, 0.80, 0.90, 1.00],
+        "random_positive": [0.10, 0.15, 0.25, 0.30],
+    }
+    seq_idx = 0
+    for pool, colors in values.items():
+        for color in colors:
+            rows.append(
+                {
+                    "seq_idx": seq_idx,
+                    "pool_name": pool,
+                    "full_prior_score": 3.0,
+                    "full_conditional_books_score": 3.0 + color,
+                    "full_color_score": color,
+                    "ablated_prior_score": 3.0,
+                    "ablated_conditional_books_score": 3.0 + color,
+                    "ablated_color_score": color,
+                    "variant_family": "test",
+                    "cond_removed_layers": "[]",
+                    "marg_removed_layers": "[]",
+                }
+            )
+            seq_idx += 1
+    return pd.DataFrame(rows)
+
+
+def test_pairwise_metrics_use_lower_color_as_positive() -> None:
+    metrics, shifts = compute_pairwise_metrics(
+        _metric_frame(),
+        variant_id="toy",
+        cutoff_tau64=0.235,
+        pairwise_tasks=["hp_vs_hn", "hp_vs_tn", "rp_vs_hn"],
+    )
+
+    by_task = metrics.set_index("pairwise_task")
+    assert by_task.loc["hp_vs_hn", "roc_auc"] == 1.0
+    assert by_task.loc["hp_vs_tn", "average_precision"] == 1.0
+    assert by_task.loc["hp_vs_hn", "recall_at_original_cutoff"] == 1.0
+    assert by_task.loc["hp_vs_hn", "precision_at_original_cutoff"] == 1.0
+    assert by_task.loc["rp_vs_hn", "roc_auc"] < 1.0
+    assert set(shifts["score_name"]) == {"color", "conditional_books", "prior"}
+
+
+def test_auc_and_ap_helpers() -> None:
+    labels = np.array([1, 1, 0, 0])
+    scores = np.array([0.9, 0.8, 0.2, 0.1])
+
+    assert roc_auc_from_scores(labels, scores) == 1.0
+    assert average_precision_from_scores(labels, scores) == 1.0
+
+
+def test_token_recovery_plan_helpers(tmp_path) -> None:
+    script_path = __import__("pathlib").Path(__file__).resolve().parents[1] / "scripts" / "09_recover_score_pool_tokens.py"
+    spec = importlib.util.spec_from_file_location("recover_script", script_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["recover_script"] = module
+    spec.loader.exec_module(module)
+
+    remote = [
+        module.RemoteFile(path="full_data/c4/a.npy", size=10 * 512 * np.dtype(np.uint16).itemsize),
+        module.RemoteFile(path="full_data/c4/b.npy", size=10 * 512 * np.dtype(np.uint16).itemsize),
+    ]
+    needed, total_chunks = module.build_needed_file_plan(
+        c4_indices=np.array([0, 9, 10, 19], dtype=np.int64),
+        token_files=remote,
+        dtype=np.dtype(np.uint16),
+        sequence_length=512,
+    )
+
+    assert total_chunks == 20
+    assert [item.path for item in needed] == ["full_data/c4/a.npy", "full_data/c4/b.npy"]
+    assert [item.needed_rows for item in needed] == [2, 2]

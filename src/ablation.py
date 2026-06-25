@@ -136,3 +136,23 @@ def apply_paired_ablation(
         raise AssertionError("Conditional and marginal models have different block counts")
     return cond_record, marg_record
 
+
+def apply_dual_ablation(
+    cond_model: nn.Module,
+    marg_model: nn.Module,
+    *,
+    cond_removed_layers: Iterable[int],
+    marg_removed_layers: Iterable[int],
+    total_layers: int | None = None,
+) -> tuple[AblationRecord, AblationRecord]:
+    cond_record = apply_layer_ablation(
+        cond_model,
+        cond_removed_layers,
+        total_layers=total_layers,
+    )
+    marg_record = apply_layer_ablation(
+        marg_model,
+        marg_removed_layers,
+        total_layers=total_layers,
+    )
+    return cond_record, marg_record

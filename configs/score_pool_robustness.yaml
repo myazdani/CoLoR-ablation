@@ -1,0 +1,163 @@
+seed: 17
+
+paths:
+  paper_code: ../color-filter-olmo
+  existing_pool_analysis_dir: ../books-color-score-reproduction/artifacts/pool_analysis
+  existing_score_reproduction_dir: ../books-color-score-reproduction
+  output_dir: results/score-pool-robustness
+  figures_dir: reports/score-pool-robustness/figures
+
+target:
+  name: books
+  cond_checkpoint: assets/books_cond_hf
+  marg_checkpoint: assets/books_marg_hf
+  tokenizer: allenai/eleuther-ai-gpt-neox-20b-pii-special
+  sequence_length: 512
+
+token_recovery:
+  mode: exact_from_hf_full_data
+  hf_repo: hlzhang109/CoLoR-filter
+  remote_prefix: full_data/c4
+  local_cache_dir: data/token_cache
+  recovered_tokens: data/score_pool_tokens.npy
+  recovered_meta: data/score_pool_meta.parquet
+  recovery_plan: results/score-pool-robustness/token_recovery_plan.json
+  memmap_dtype: uint16
+  sequence_length: 512
+  max_download_gb_without_confirmation: 25
+
+scoring:
+  batch_size: 64
+  dtype: bf16
+  device: auto
+  shard_size: 5000
+  total_layers: 12
+
+metrics:
+  cutoff_tau64: 0.3513622284
+  pairwise_tasks:
+    - hp_vs_hn
+    - hp_vs_rn
+    - hp_vs_tn
+    - rp_vs_hn
+    - rp_vs_rn
+    - rp_vs_tn
+
+variants:
+  - id: full
+    family: baseline
+    cond_remove: []
+    marg_remove: []
+  - id: full_rescore
+    family: baseline
+    cond_remove: []
+    marg_remove: []
+
+  - id: pair_top1
+    family: paired
+    cond_remove: [11]
+    marg_remove: [11]
+  - id: pair_top2
+    family: paired
+    cond_remove: [10, 11]
+    marg_remove: [10, 11]
+  - id: pair_top4
+    family: paired
+    cond_remove: [8, 9, 10, 11]
+    marg_remove: [8, 9, 10, 11]
+  - id: pair_top6
+    family: paired
+    cond_remove: [6, 7, 8, 9, 10, 11]
+    marg_remove: [6, 7, 8, 9, 10, 11]
+  - id: pair_mid2
+    family: paired
+    cond_remove: [5, 6]
+    marg_remove: [5, 6]
+  - id: pair_mid4
+    family: paired
+    cond_remove: [4, 5, 6, 7]
+    marg_remove: [4, 5, 6, 7]
+  - id: pair_bot1
+    family: paired
+    cond_remove: [0]
+    marg_remove: [0]
+  - id: pair_bot2
+    family: paired
+    cond_remove: [0, 1]
+    marg_remove: [0, 1]
+  - id: pair_bot4
+    family: paired
+    cond_remove: [0, 1, 2, 3]
+    marg_remove: [0, 1, 2, 3]
+  - id: pair_bot6
+    family: paired
+    cond_remove: [0, 1, 2, 3, 4, 5]
+    marg_remove: [0, 1, 2, 3, 4, 5]
+
+  - id: cond_top1_marg_bot1
+    family: cond_top_marg_bot
+    cond_remove: [11]
+    marg_remove: [0]
+  - id: cond_top2_marg_bot2
+    family: cond_top_marg_bot
+    cond_remove: [10, 11]
+    marg_remove: [0, 1]
+  - id: cond_top4_marg_bot4
+    family: cond_top_marg_bot
+    cond_remove: [8, 9, 10, 11]
+    marg_remove: [0, 1, 2, 3]
+  - id: cond_top6_marg_bot6
+    family: cond_top_marg_bot
+    cond_remove: [6, 7, 8, 9, 10, 11]
+    marg_remove: [0, 1, 2, 3, 4, 5]
+
+  - id: cond_bot1_marg_top1
+    family: cond_bot_marg_top
+    cond_remove: [0]
+    marg_remove: [11]
+  - id: cond_bot2_marg_top2
+    family: cond_bot_marg_top
+    cond_remove: [0, 1]
+    marg_remove: [10, 11]
+  - id: cond_bot4_marg_top4
+    family: cond_bot_marg_top
+    cond_remove: [0, 1, 2, 3]
+    marg_remove: [8, 9, 10, 11]
+  - id: cond_bot6_marg_top6
+    family: cond_bot_marg_top
+    cond_remove: [0, 1, 2, 3, 4, 5]
+    marg_remove: [6, 7, 8, 9, 10, 11]
+
+  - id: cond_top1_only
+    family: cond_only
+    cond_remove: [11]
+    marg_remove: []
+  - id: cond_top2_only
+    family: cond_only
+    cond_remove: [10, 11]
+    marg_remove: []
+  - id: cond_top4_only
+    family: cond_only
+    cond_remove: [8, 9, 10, 11]
+    marg_remove: []
+  - id: cond_top6_only
+    family: cond_only
+    cond_remove: [6, 7, 8, 9, 10, 11]
+    marg_remove: []
+
+  - id: marg_top1_only
+    family: marg_only
+    cond_remove: []
+    marg_remove: [11]
+  - id: marg_top2_only
+    family: marg_only
+    cond_remove: []
+    marg_remove: [10, 11]
+  - id: marg_top4_only
+    family: marg_only
+    cond_remove: []
+    marg_remove: [8, 9, 10, 11]
+  - id: marg_top6_only
+    family: marg_only
+    cond_remove: []
+    marg_remove: [6, 7, 8, 9, 10, 11]
