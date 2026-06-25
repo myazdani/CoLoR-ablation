@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import json
 import sys
 from types import SimpleNamespace
 
@@ -189,6 +190,57 @@ def test_token_recovery_plan_helpers(tmp_path) -> None:
     assert total_chunks == 20
     assert [item.path for item in needed] == ["full_data/c4/a.npy", "full_data/c4/b.npy"]
     assert [item.needed_rows for item in needed] == [2, 2]
+
+
+def test_list_remote_files_follows_hf_pagination(monkeypatch) -> None:
+    script_path = __import__("pathlib").Path(__file__).resolve().parents[1] / "scripts" / "09_recover_score_pool_tokens.py"
+    spec = importlib.util.spec_from_file_location("recover_script_pagination", script_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["recover_script_pagination"] = module
+    spec.loader.exec_module(module)
+
+    class FakeResponse:
+        def __init__(self, payload, link=""):
+            self.payload = payload
+            self.headers = {"Link": link} if link else {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self):
+            return json.dumps(self.payload).encode("utf-8")
+
+    def fake_urlopen(request, timeout):
+        url = request.full_url
+        if "cursor=page2" in url:
+            return FakeResponse(
+                [
+                    {"type": "file", "path": "full_data/c4/b.npy", "size": 20},
+                    {"type": "file", "path": "full_data/c4/b.csv.gz", "size": 2},
+                ]
+            )
+        return FakeResponse(
+            [
+                {"type": "file", "path": "full_data/c4/a.npy", "size": 10},
+                {"type": "file", "path": "full_data/c4/a.csv.gz", "size": 1},
+            ],
+            link='<https://example.test/tree?cursor=page2>; rel="next"',
+        )
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", fake_urlopen)
+
+    files = module.list_remote_files("owner/repo", "full_data/c4")
+
+    assert [file.path for file in files] == [
+        "full_data/c4/a.npy",
+        "full_data/c4/a.csv.gz",
+        "full_data/c4/b.npy",
+        "full_data/c4/b.csv.gz",
+    ]
 
 
 def test_doc_location_recovery_pads_and_truncates(tmp_path, monkeypatch) -> None:

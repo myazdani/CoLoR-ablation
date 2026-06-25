@@ -49,78 +49,35 @@ Output plan:
 results/score-pool-robustness/token_recovery_plan.json
 ```
 
-Initial key facts from the fixed-chunk plan:
+Corrected key facts from the fixed-chunk plan:
 
 ```text
 sample rows: 500,000
 unique c4 indices: 496,205
-remote token files visible under full_data/c4: 25
-remote token bytes visible: 47.69 GiB
-remote token chunks inferred at uint16 x 512: 50,005,443
+remote token files visible under full_data/c4: 170
+remote token bytes visible: 323.52 GiB
+remote token chunks inferred at uint16 x 512: 339,236,242
 max requested c4_index: 339,236,143
-index coverage ok: False
-```
-
-Initial interpretation:
-
-Treating the visible `*.npy` token files as contiguous fixed 512-token chunks
-does not cover the sampled C4 index range. The sampled score indices go up to
-about `339M`, but the visible token files only infer about `50M` 512-token
-chunks under that convention.
-
-## CSV Sidecar Recovery Attempt
-
-The visible `full_data/c4` release also contains `part-*.csv.gz` sidecars. These
-sidecars map C4 document ids to token offsets in the raw `part-*.npy` token
-streams. The recovery script was updated to support this mapping via:
-
-```yaml
-token_recovery:
-  index_source: csv_sidecar
-  recovery_locations: results/score-pool-robustness/token_recovery_locations.csv
-```
-
-Command:
-
-```bash
-python scripts/09_recover_score_pool_tokens.py \
-  --config configs/score_pool_robustness.yaml \
-  --force-rebuild-locations
-```
-
-Key facts from the sidecar plan:
-
-```text
-sample rows: 500,000
-unique c4 indices: 496,205
-sidecar matched c4 indices: 6,398
-index coverage ok: False
-remote sidecar files visible: 25
-remote sidecar bytes visible: 1.51 GiB
-remote token files visible: 25
-remote token bytes visible: 47.69 GiB
-needed token files for matched subset: 2
-needed token bytes for matched subset: 3.82 GiB
-```
-
-Sidecar artifacts:
-
-```text
-results/score-pool-robustness/token_recovery_plan.json
-results/score-pool-robustness/token_recovery_locations.csv
+index coverage ok: True
+needed token files: 170
+needed token bytes: 323.52 GiB
 ```
 
 Interpretation:
 
-The CSV-sidecar mapping confirms that the official `c4_index` values are
-document ids for at least part of the release, but the public `full_data/c4`
-tree only matches `6,398 / 496,205` unique sampled ids. Therefore the currently
-visible HF files still cannot recover the exact five 100K official sampled
-pools.
+Exact recovery of the five official 100K sampled pools is possible from the
+visible public HF tree if we can download the token streams. The earlier
+`25 *.npy` / `25 *.csv.gz` count was an API pagination bug: the first HF tree
+page has 50 files, but the full directory has 340 files:
 
-Therefore exact recovery of the existing five official sampled pools cannot
-proceed from the currently visible HF token tree without locating additional
-tokenized C4 sidecars/shards or confirming another missing index mapping.
+```text
+170 *.npy token files
+170 *.csv.gz sidecars
+```
+
+The score-pool `c4_index` values are packed-token chunk indices in the original
+scoring dataset, so the correct recovery path is `index_source:
+contiguous_token_chunks`, not the CSV-sidecar document-id path.
 
 ## Local Asset Status
 
@@ -134,18 +91,32 @@ data/ missing
 Available local disk is also too low for the visible token shard download:
 
 ```text
-available disk: ~14 GiB
-visible full_data/c4 token shard size: 47.69 GiB
+available disk: ~11 GiB
+visible full_data/c4 token shard size: 323.52 GiB
 ```
 
-This prevents local fallback execution as well, because fallback requires
-converted Books conditional/marginal checkpoints and enough storage for a frozen
-token pool plus score parquets.
+This prevents local exact recovery. Colab exact recovery requires enough local
+scratch capacity for the 323.52 GiB token cache, plus Drive capacity for the
+recovered 500K-row token pool and score outputs.
 
 ## Required Next Execution Path
 
-Use the fallback path from `TASK_ablation_robustness_score_pools.md` unless
-additional tokenized C4 shards are located.
+Preferred path, if Drive storage allows:
+
+1. Run exact token recovery on Colab/Drive:
+
+```bash
+python scripts/09_recover_score_pool_tokens.py \
+  --config configs/score_pool_robustness.yaml \
+  --download \
+  --allow-large-download
+```
+
+2. Score the official recovered 500K token pool with `scripts/10_score_pool_variant.py`.
+3. Compute metrics and plots with `scripts/11_score_pool_metrics.py` and
+   `scripts/12_score_pool_plots.py`.
+
+Fallback path, if the 323.52 GiB token download is not practical:
 
 Fallback execution should happen on Colab/Drive:
 

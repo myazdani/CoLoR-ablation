@@ -4,25 +4,12 @@ This runbook executes the fallback path for
 `tasks/TASK_ablation_robustness_score_pools.md`.
 
 The official five sampled pools could not be recovered exactly from the visible
-`hlzhang109/CoLoR-filter/full_data/c4` tree.
-
-The first local preflight treated the visible token streams as fixed 512-token
-chunks and found:
+`hlzhang109/CoLoR-filter/full_data/c4` tree. The local preflight found:
 
 ```text
 visible token chunks inferred: 50,005,443
 max requested c4_index:        339,236,143
 index coverage ok:             False
-```
-
-The second preflight used the `part-*.csv.gz` sidecars as document-id to token
-offset maps. That confirmed the mapping for a small subset but still did not
-cover the official pools:
-
-```text
-unique sampled c4 indices:      496,205
-sidecar matched c4 indices:       6,398
-index coverage ok:                False
 ```
 
 So this runbook builds a new frozen packed C4 pool, scores it with the full

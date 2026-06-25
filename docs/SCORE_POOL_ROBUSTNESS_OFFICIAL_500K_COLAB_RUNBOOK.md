@@ -1,0 +1,579 @@
+# Official 500K Score-Pool Robustness Colab Runbook
+
+This runbook executes the exact official-pool path for
+`tasks/TASK_ablation_robustness_score_pools.md`.
+
+It uses the five existing official sampled pools:
+
+```text
+random_positive_samples.npz
+hard_positive_samples.npz
+random_negative_samples.npz
+hard_negative_samples.npz
+tail_negative_samples.npz
+```
+
+and recovers all `500,000` corresponding packed 512-token C4 rows from
+`hlzhang109/CoLoR-filter/full_data/c4`.
+
+Corrected preflight facts:
+
+```text
+sample rows:             500,000
+unique c4 indices:       496,205
+visible token files:     170 *.npy
+visible token bytes:     323.52 GiB
+token chunks inferred:   339,236,242
+max requested c4_index:  339,236,143
+index coverage ok:       True
+needed token files:      170
+```
+
+Use this runbook only when the Colab VM has a large local scratch disk. The
+token cache should live on scratch, not Drive.
+
+## 0. Resource Assumptions
+
+Recommended Colab resources:
+
+```text
+GPU:             A100 80GB
+System RAM:      >= 100GB
+local scratch:   >= 360GB free
+Drive quota:     enough for recovered pool, scores, metrics, and plots
+```
+
+From the current Colab resource panel, this VM is suitable:
+
+```text
+GPU RAM:              80GB
+System RAM:           167GB
+Disk [local-scratch]: 368GB
+```
+
+Do not put the `323.52 GiB` token cache under `/content` or Drive.
+
+## 1. Runtime, Drive, and Token
+
+Set runtime to an A100 GPU:
+
+```python
+# PYTHON CELL
+!nvidia-smi
+```
+
+Mount Drive:
+
+```python
+# PYTHON CELL
+from google.colab import drive
+drive.mount("/content/drive")
+```
+
+If needed, load a read-only Hugging Face token from Colab secrets:
+
+```python
+# PYTHON CELL
+import os
+from google.colab import userdata
+os.environ["HF_TOKEN"] = userdata.get("HF_TOKEN") or ""
+```
+
+Check storage:
+
+```python
+# PYTHON CELL
+!df -h /content /content/local-scratch /content/drive/MyDrive
+```
+
+Stop if `/content/local-scratch` has less than about `340GiB` free.
+
+## 2. Clone, Pin, and Install
+
+Push the commit containing this runbook and the pagination-aware recovery script,
+then set `PROJECT_SHA` to that exact pushed commit.
+
+```python
+# PYTHON CELL
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+PROJECT = "/content/CoLoR-ablation"
+PROJECT_REPO = "https://github.com/myazdani/CoLoR-ablation.git"
+PROJECT_SHA = "REPLACE_WITH_PUSHED_COMMIT_SHA"
+
+OLMO = "/content/color-filter-olmo"
+OLMO_REPO = "https://github.com/myazdani/color-filter-olmo.git"
+OLMO_SHA = "3e0424c8cc6c53aaad70d3a3dea3fd683658cdd4"
+
+def run(*args):
+    subprocess.run([str(arg) for arg in args], check=True)
+
+def out(*args):
+    return subprocess.check_output([str(arg) for arg in args], text=True).strip()
+
+if PROJECT_SHA == "REPLACE_WITH_PUSHED_COMMIT_SHA":
+    raise RuntimeError("Set PROJECT_SHA to the pushed commit before running.")
+
+project = Path(PROJECT)
+if not project.exists():
+    run("git", "clone", PROJECT_REPO, PROJECT)
+elif (project / ".git").is_dir():
+    run("git", "-C", PROJECT, "fetch", "origin")
+else:
+    raise RuntimeError(f"{PROJECT} exists but is not a git checkout")
+run("git", "-C", PROJECT, "checkout", PROJECT_SHA)
+actual_project_sha = out("git", "-C", PROJECT, "rev-parse", "HEAD")
+if actual_project_sha != PROJECT_SHA:
+    raise RuntimeError(f"Project SHA mismatch: expected {PROJECT_SHA}, got {actual_project_sha}")
+
+olmo = Path(OLMO)
+if not olmo.exists():
+    run("git", "clone", OLMO_REPO, OLMO)
+elif not (olmo / ".git").is_dir():
+    raise RuntimeError(f"{OLMO} exists but is not a git checkout")
+run("git", "-C", OLMO, "fetch", "origin")
+run("git", "-C", OLMO, "checkout", OLMO_SHA)
+actual_olmo_sha = out("git", "-C", OLMO, "rev-parse", "HEAD")
+if actual_olmo_sha != OLMO_SHA:
+    raise RuntimeError(f"OLMo SHA mismatch: expected {OLMO_SHA}, got {actual_olmo_sha}")
+
+%cd {PROJECT}
+run(sys.executable, "-m", "pip", "install", "-q", "--no-deps", "-r", "requirements-colab.txt")
+print("project sha:", actual_project_sha)
+print("olmo sha:", actual_olmo_sha)
+```
+
+## 3. Required Drive Inputs
+
+Upload or copy the existing local pool-analysis artifacts to Drive:
+
+```text
+MyDrive/color-filter-ablation/artifacts/pool_analysis/random_positive_samples.npz
+MyDrive/color-filter-ablation/artifacts/pool_analysis/hard_positive_samples.npz
+MyDrive/color-filter-ablation/artifacts/pool_analysis/random_negative_samples.npz
+MyDrive/color-filter-ablation/artifacts/pool_analysis/hard_negative_samples.npz
+MyDrive/color-filter-ablation/artifacts/pool_analysis/tail_negative_samples.npz
+```
+
+Converted checkpoints should already be on Drive:
+
+```text
+MyDrive/color-filter-ablation/assets/hf/books_marg_hf
+MyDrive/color-filter-ablation/assets/hf/books_cond_hf
+```
+
+Verify:
+
+```python
+# PYTHON CELL
+from pathlib import Path
+
+DRIVE = "/content/drive/MyDrive/color-filter-ablation"
+SCRATCH = "/content/local-scratch/color-filter-ablation"
+
+for sub in [
+    "data",
+    "results/score-pool-robustness-official-500k",
+    "reports/score-pool-robustness-official-500k/figures",
+]:
+    Path(f"{DRIVE}/{sub}").mkdir(parents=True, exist_ok=True)
+Path(SCRATCH).mkdir(parents=True, exist_ok=True)
+
+pool_dir = Path(f"{DRIVE}/artifacts/pool_analysis")
+pool_files = [
+    "random_positive_samples.npz",
+    "hard_positive_samples.npz",
+    "random_negative_samples.npz",
+    "hard_negative_samples.npz",
+    "tail_negative_samples.npz",
+]
+missing_pools = [name for name in pool_files if not (pool_dir / name).is_file()]
+if missing_pools:
+    raise FileNotFoundError(f"Missing pool files in {pool_dir}: {missing_pools}")
+
+required_ckpt = {
+    "config.json",
+    "pytorch_model.bin",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "special_tokens_map.json",
+}
+for name in ["books_marg_hf", "books_cond_hf"]:
+    p = Path(f"{DRIVE}/assets/hf/{name}")
+    missing = sorted(required_ckpt - {x.name for x in p.iterdir()}) if p.is_dir() else sorted(required_ckpt)
+    if missing:
+        raise FileNotFoundError(f"{p} missing converted checkpoint files: {missing}")
+print("Drive inputs OK")
+```
+
+## 4. Patch Config for Official 500K
+
+```python
+# PYTHON CELL
+from pathlib import Path
+import yaml
+
+robust_path = Path("configs/score_pool_robustness.yaml")
+cfg = yaml.safe_load(robust_path.read_text())
+
+cfg["paths"]["paper_code"] = OLMO
+cfg["paths"]["existing_pool_analysis_dir"] = f"{DRIVE}/artifacts/pool_analysis"
+cfg["paths"]["output_dir"] = f"{DRIVE}/results/score-pool-robustness-official-500k"
+cfg["paths"]["figures_dir"] = f"{DRIVE}/reports/score-pool-robustness-official-500k/figures"
+
+cfg["target"]["cond_checkpoint"] = f"{DRIVE}/assets/hf/books_cond_hf"
+cfg["target"]["marg_checkpoint"] = f"{DRIVE}/assets/hf/books_marg_hf"
+
+cfg["token_recovery"]["index_source"] = "contiguous_token_chunks"
+cfg["token_recovery"]["local_cache_dir"] = f"{SCRATCH}/token_cache"
+cfg["token_recovery"]["recovered_tokens"] = f"{DRIVE}/data/score_pool_tokens_official_500k.npy"
+cfg["token_recovery"]["recovered_meta"] = f"{DRIVE}/data/score_pool_meta_official_500k.parquet"
+cfg["token_recovery"]["recovery_plan"] = (
+    f"{DRIVE}/results/score-pool-robustness-official-500k/token_recovery_plan.json"
+)
+cfg["token_recovery"]["max_download_gb_without_confirmation"] = 25
+
+cfg["scoring"]["batch_size"] = 64
+cfg["scoring"]["device"] = "cuda"
+cfg["scoring"]["dtype"] = "bf16"
+cfg["scoring"]["shard_size"] = 5000
+
+robust_path.write_text(yaml.safe_dump(cfg, sort_keys=False))
+print(robust_path.read_text())
+```
+
+## 5. Cheap GPU Gate
+
+Patch the existing checkpoint/model sanity check to use the Colab paths:
+
+```python
+# PYTHON CELL
+from pathlib import Path
+import yaml
+
+default_path = Path("configs/default.yaml")
+default_cfg = yaml.safe_load(default_path.read_text())
+default_cfg["paths"]["paper_code"] = OLMO
+default_cfg["target"]["cond_checkpoint"] = f"{DRIVE}/assets/hf/books_cond_hf"
+default_cfg["target"]["marg_checkpoint"] = f"{DRIVE}/assets/hf/books_marg_hf"
+default_path.write_text(yaml.safe_dump(default_cfg, sort_keys=False))
+```
+
+Then run the validation before downloading token files:
+
+```python
+# PYTHON CELL
+!PYTHONPATH="{OLMO}" python scripts/06_local_validation.py --config configs/default.yaml --device cuda
+```
+
+Expected directionality:
+
+```text
+gutenberg_color_mean < c4_color_mean
+```
+
+## 6. Exact Token-Recovery Preflight
+
+This should not download token files:
+
+```python
+# PYTHON CELL
+!python scripts/09_recover_score_pool_tokens.py --config configs/score_pool_robustness.yaml
+```
+
+Verify:
+
+```python
+# PYTHON CELL
+import json
+from pathlib import Path
+
+plan_path = Path(f"{DRIVE}/results/score-pool-robustness-official-500k/token_recovery_plan.json")
+plan = json.loads(plan_path.read_text())
+print(json.dumps({
+    "sample_rows": plan["sample_rows"],
+    "unique_c4_indices": plan["unique_c4_indices"],
+    "remote_token_files": plan["total_remote_files"],
+    "remote_token_gib": plan["total_remote_bytes"] / 1024**3,
+    "total_remote_chunks": plan["total_remote_chunks"],
+    "max_c4_index": plan["max_c4_index"],
+    "index_coverage_ok": plan["index_coverage_ok"],
+    "needed_file_count": plan["needed_file_count"],
+    "total_needed_gib": plan["total_needed_gib"],
+}, indent=2))
+if not plan["index_coverage_ok"]:
+    raise RuntimeError("Exact official-pool token recovery is not covered by visible token files")
+if plan["needed_file_count"] != 170:
+    raise RuntimeError("Unexpected token-file count; re-check HF tree pagination")
+```
+
+Expected:
+
+```text
+index_coverage_ok: True
+needed_file_count: 170
+total_needed_gib: 323.52
+```
+
+## 7. Download Tokens and Recover Official Pool
+
+This downloads about `323.52 GiB` to local scratch and writes the recovered
+500K-row pool to Drive.
+
+```python
+# PYTHON CELL
+import os
+os.environ["HF_HOME"] = f"{SCRATCH}/hf_home"
+os.environ["HUGGINGFACE_HUB_CACHE"] = f"{SCRATCH}/hf_home/hub"
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+```
+
+```python
+# PYTHON CELL
+!python scripts/09_recover_score_pool_tokens.py \
+  --config configs/score_pool_robustness.yaml \
+  --download \
+  --allow-large-download
+```
+
+Verify recovered pool:
+
+```python
+# PYTHON CELL
+import numpy as np
+import pandas as pd
+
+tokens = np.load(f"{DRIVE}/data/score_pool_tokens_official_500k.npy", mmap_mode="r")
+meta = pd.read_parquet(f"{DRIVE}/data/score_pool_meta_official_500k.parquet")
+print(tokens.shape, tokens.dtype)
+print(meta["pool_name"].value_counts())
+if tokens.shape != (500_000, 512):
+    raise RuntimeError(f"Unexpected token shape: {tokens.shape}")
+if len(meta) != 500_000:
+    raise RuntimeError(f"Unexpected metadata rows: {len(meta)}")
+```
+
+After this verification, the local scratch token cache is no longer needed for
+scoring:
+
+```python
+# PYTHON CELL
+!du -sh "{SCRATCH}/token_cache" || true
+```
+
+Delete it only after the recovered Drive pool is verified:
+
+```python
+# PYTHON CELL
+!rm -rf "{SCRATCH}/token_cache"
+!df -h /content/local-scratch
+```
+
+## 8. Baseline and Noise-Floor Scoring
+
+Score the recovered official 500K pool with full models:
+
+```python
+# PYTHON CELL
+!PYTHONPATH="{OLMO}" python scripts/10_score_pool_variant.py \
+  --config configs/score_pool_robustness.yaml \
+  --variant full
+```
+
+Optional but recommended noise floor:
+
+```python
+# PYTHON CELL
+!PYTHONPATH="{OLMO}" python scripts/10_score_pool_variant.py \
+  --config configs/score_pool_robustness.yaml \
+  --variant full_rescore
+```
+
+Compute baseline metrics:
+
+```python
+# PYTHON CELL
+!python scripts/11_score_pool_metrics.py --config configs/score_pool_robustness.yaml
+import pandas as pd
+metrics = pd.read_csv(f"{DRIVE}/results/score-pool-robustness-official-500k/metrics_pairwise.csv")
+display(metrics[["variant", "pairwise_task", "roc_auc", "average_precision", "f1_at_original_cutoff", "f1_at_balanced_rate"]])
+```
+
+Inspect this before launching the ablation grid.
+
+## 9. Pilot Ablations
+
+Run a small pilot first:
+
+```python
+# PYTHON CELL
+pilot_variants = [
+    "pair_top2",
+    "cond_top2_marg_bot2",
+    "cond_bot2_marg_top2",
+    "cond_top2_only",
+    "marg_top2_only",
+]
+for variant in pilot_variants:
+    print(f"=== {variant} ===")
+    !PYTHONPATH="{OLMO}" python scripts/10_score_pool_variant.py --config configs/score_pool_robustness.yaml --variant {variant}
+```
+
+Recompute metrics:
+
+```python
+# PYTHON CELL
+!python scripts/11_score_pool_metrics.py --config configs/score_pool_robustness.yaml
+pilot = pd.read_csv(f"{DRIVE}/results/score-pool-robustness-official-500k/metrics_pairwise.csv")
+display(pilot[pilot["variant"].isin(["full", "full_rescore"] + pilot_variants)])
+```
+
+## 10. Full Ablation Grid
+
+Run the full grid only after the pilot looks sane:
+
+```python
+# PYTHON CELL
+variants = [
+    "pair_top1", "pair_top2", "pair_top4", "pair_top6",
+    "pair_mid2", "pair_mid4",
+    "pair_bot1", "pair_bot2", "pair_bot4", "pair_bot6",
+    "cond_top1_marg_bot1", "cond_top2_marg_bot2", "cond_top4_marg_bot4", "cond_top6_marg_bot6",
+    "cond_bot1_marg_top1", "cond_bot2_marg_top2", "cond_bot4_marg_top4", "cond_bot6_marg_top6",
+    "cond_top1_only", "cond_top2_only", "cond_top4_only", "cond_top6_only",
+    "marg_top1_only", "marg_top2_only", "marg_top4_only", "marg_top6_only",
+]
+for variant in variants:
+    print(f"=== {variant} ===")
+    !PYTHONPATH="{OLMO}" python scripts/10_score_pool_variant.py --config configs/score_pool_robustness.yaml --variant {variant}
+```
+
+The scoring script is resumable. Re-running the same command skips completed
+score shards unless `--force` is passed.
+
+## 11. Metrics, Plots, and Report
+
+```python
+# PYTHON CELL
+!python scripts/11_score_pool_metrics.py --config configs/score_pool_robustness.yaml
+!python scripts/12_score_pool_plots.py --config configs/score_pool_robustness.yaml
+```
+
+Generate Markdown and HTML reports:
+
+```python
+# PYTHON CELL
+import html
+from pathlib import Path
+import pandas as pd
+
+results_dir = Path(f"{DRIVE}/results/score-pool-robustness-official-500k")
+report_dir = Path(f"{DRIVE}/reports/score-pool-robustness-official-500k")
+report_dir.mkdir(parents=True, exist_ok=True)
+metrics = pd.read_csv(results_dir / "metrics_pairwise.csv")
+metric_cols = ["roc_auc", "average_precision", "f1_at_original_cutoff", "f1_at_balanced_rate"]
+summary = metrics.groupby("variant")[metric_cols].mean().sort_values("roc_auc", ascending=False)
+by_task = metrics.groupby("pairwise_task")[metric_cols].mean().sort_values("roc_auc")
+figures = [
+    ("ROC AUC", "figures/auc_by_variant_and_task.png"),
+    ("Average precision", "figures/ap_by_variant_and_task.png"),
+    ("F1 at original cutoff", "figures/f1_original_cutoff_by_variant.png"),
+    ("F1 at balanced rate", "figures/f1_balanced_rate_by_variant.png"),
+    ("Color shift", "figures/color_shift_by_variant.png"),
+]
+
+report = [
+    "# Official 500K Score-Pool Robustness Report",
+    "",
+    "Label source: official five 100K sampled pools.",
+    "",
+    "## Mean Metrics by Variant",
+    "",
+    "```text",
+    summary.round(4).reset_index().to_string(index=False),
+    "```",
+    "",
+    "## Hardest Pairwise Tasks",
+    "",
+    "```text",
+    by_task.round(4).reset_index().to_string(index=False),
+    "```",
+    "",
+    "## Figures",
+    "",
+    *[f"- [{label}]({path})" for label, path in figures],
+    "",
+    "## Interpretation Notes",
+    "",
+    "- Compare original-cutoff F1 with balanced-rate F1 to separate calibration shift from ranking preservation.",
+    "- Use full_rescore, when run, as the nondeterminism/noise floor.",
+]
+(report_dir / "report.md").write_text("\n".join(report) + "\n")
+
+html_doc = f"""<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Official 500K Score-Pool Robustness Report</title>
+  <style>
+    body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 32px; line-height: 1.45; color: #1f2933; }}
+    table {{ border-collapse: collapse; margin: 12px 0 28px; font-size: 13px; }}
+    th, td {{ border: 1px solid #d0d7de; padding: 6px 8px; text-align: right; }}
+    th:first-child, td:first-child {{ text-align: left; }}
+    th {{ background: #f6f8fa; }}
+    img {{ max-width: 100%; border: 1px solid #d0d7de; margin: 8px 0 24px; }}
+    code {{ background: #f6f8fa; padding: 2px 4px; border-radius: 4px; }}
+  </style>
+</head>
+<body>
+  <h1>Official 500K Score-Pool Robustness Report</h1>
+  <p>Label source: official five 100K sampled pools.</p>
+  <h2>Mean Metrics by Variant</h2>
+  {summary.round(4).reset_index().to_html(index=False)}
+  <h2>Hardest Pairwise Tasks</h2>
+  {by_task.round(4).reset_index().to_html(index=False)}
+  <h2>Figures</h2>
+  {''.join(f'<h3>{html.escape(label)}</h3><img src="{html.escape(path)}" alt="{html.escape(label)}">' for label, path in figures)}
+</body>
+</html>
+"""
+(report_dir / "report.html").write_text(html_doc)
+print(report_dir / "report.md")
+print(report_dir / "report.html")
+```
+
+## 12. Outputs
+
+Durable outputs on Drive:
+
+```text
+data/score_pool_tokens_official_500k.npy
+data/score_pool_meta_official_500k.parquet
+results/score-pool-robustness-official-500k/token_recovery_plan.json
+results/score-pool-robustness-official-500k/scores_*.parquet
+results/score-pool-robustness-official-500k/metrics_pairwise.csv
+results/score-pool-robustness-official-500k/score_shift_diagnostics.csv
+reports/score-pool-robustness-official-500k/figures/*.png
+reports/score-pool-robustness-official-500k/report.md
+reports/score-pool-robustness-official-500k/report.html
+```
+
+Local scratch can be deleted after recovery:
+
+```text
+/content/local-scratch/color-filter-ablation/token_cache
+```
+
+## 13. Failure Modes
+
+- If preflight reports fewer than `170` token files, the checkout is missing the
+  pagination-aware `list_remote_files()` fix.
+- If scratch is below about `340GiB`, do not start token download.
+- If Colab disconnects after deleting scratch, recovery remains available from
+  Drive, but the raw token cache would need to be redownloaded only if recovery
+  must be rerun.
+- If baseline metrics are poor, stop before the ablation grid and inspect
+  checkpoint paths, recovered token shape, and score direction.

@@ -6,6 +6,7 @@ import csv
 import gzip
 import json
 import os
+import re
 import sys
 import urllib.parse
 import urllib.request
@@ -75,23 +76,28 @@ def api_tree_url(repo_id: str, path: str, *, recursive: bool) -> str:
 
 
 def list_remote_files(repo_id: str, prefix: str, *, recursive: bool = True) -> list[RemoteFile]:
-    request = urllib.request.Request(api_tree_url(repo_id, prefix, recursive=recursive))
-    with urllib.request.urlopen(request, timeout=120) as response:
-        data = json.load(response)
     files: list[RemoteFile] = []
     dirs: list[str] = []
-    for item in data:
-        if item.get("type") == "directory":
+    url: str | None = api_tree_url(repo_id, prefix, recursive=recursive)
+    while url:
+        request = urllib.request.Request(url)
+        with urllib.request.urlopen(request, timeout=120) as response:
+            data = json.load(response)
+            link_header = response.headers.get("Link") or ""
+        for item in data:
+            if item.get("type") == "directory":
+                path = item.get("path")
+                if recursive and isinstance(path, str):
+                    dirs.append(path)
+                continue
+            if item.get("type") != "file":
+                continue
             path = item.get("path")
-            if recursive and isinstance(path, str):
-                dirs.append(path)
-            continue
-        if item.get("type") != "file":
-            continue
-        path = item.get("path")
-        size = item.get("size")
-        if isinstance(path, str) and isinstance(size, int):
-            files.append(RemoteFile(path=path, size=size))
+            size = item.get("size")
+            if isinstance(path, str) and isinstance(size, int):
+                files.append(RemoteFile(path=path, size=size))
+        match = re.search(r'<([^>]+)>;\s*rel="next"', link_header)
+        url = match.group(1) if match else None
     for directory in dirs:
         files.extend(list_remote_files(repo_id, directory, recursive=True))
     return files
