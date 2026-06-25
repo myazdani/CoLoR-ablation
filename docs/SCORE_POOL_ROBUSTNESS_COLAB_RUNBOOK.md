@@ -61,8 +61,11 @@ os.environ["HF_TOKEN"] = userdata.get("HF_TOKEN")
 
 ## 2. Clone, Pin, and Install
 
-After pushing local `main`, update `PROJECT_SHA` to the commit you want to run.
-Until then, leave it as `"main"` and the cell will print the actual SHA.
+Push local `main` before starting the Colab run. Then replace
+`PROJECT_SHA` below with the exact pushed commit SHA that contains this
+runbook and the score-pool robustness scripts. The cell refuses to run long
+work from an unpinned `main` checkout unless you explicitly set
+`ALLOW_UNPINNED_MAIN = True` for a short smoke test.
 
 ```python
 # PYTHON CELL
@@ -73,7 +76,9 @@ from pathlib import Path
 
 PROJECT = "/content/CoLoR-ablation"
 PROJECT_REPO = "https://github.com/myazdani/CoLoR-ablation.git"
-PROJECT_SHA = "main"  # replace with an exact commit after pushing main
+PROJECT_REF = "main"
+PROJECT_SHA = "REPLACE_WITH_PUSHED_COMMIT_SHA"
+ALLOW_UNPINNED_MAIN = False
 
 OLMO = "/content/color-filter-olmo"
 OLMO_REPO = "https://github.com/myazdani/color-filter-olmo.git"
@@ -92,11 +97,16 @@ elif (project / ".git").is_dir():
     run("git", "-C", PROJECT, "fetch", "origin")
 else:
     raise RuntimeError(f"{PROJECT} exists but is not a git checkout")
-run("git", "-C", PROJECT, "checkout", PROJECT_SHA)
-if PROJECT_SHA != "main":
-    actual_project_sha = out("git", "-C", PROJECT, "rev-parse", "HEAD")
-    if actual_project_sha != PROJECT_SHA:
-        raise RuntimeError(f"Project SHA mismatch: expected {PROJECT_SHA}, got {actual_project_sha}")
+run("git", "-C", PROJECT, "checkout", PROJECT_REF)
+actual_project_sha = out("git", "-C", PROJECT, "rev-parse", "HEAD")
+if PROJECT_SHA == "REPLACE_WITH_PUSHED_COMMIT_SHA":
+    if not ALLOW_UNPINNED_MAIN:
+        raise RuntimeError(
+            f"Set PROJECT_SHA to the pushed commit before running expensive jobs. "
+            f"Current {PROJECT_REF} resolves to {actual_project_sha}."
+        )
+elif actual_project_sha != PROJECT_SHA:
+    raise RuntimeError(f"Project SHA mismatch: expected {PROJECT_SHA}, got {actual_project_sha}")
 
 olmo = Path(OLMO)
 if not olmo.exists():
@@ -454,10 +464,11 @@ completed shards will be skipped.
 !python scripts/12_score_pool_plots.py --config configs/score_pool_robustness.yaml
 ```
 
-Generate a lightweight markdown report:
+Generate lightweight Markdown and HTML reports:
 
 ```python
 # PYTHON CELL
+import html
 from pathlib import Path
 import pandas as pd
 
@@ -465,7 +476,18 @@ results_dir = Path(f"{DRIVE}/results/score-pool-robustness-fallback")
 report_dir = Path(f"{DRIVE}/reports/score-pool-robustness-fallback")
 report_dir.mkdir(parents=True, exist_ok=True)
 metrics = pd.read_csv(results_dir / "metrics_pairwise.csv")
-summary = metrics.groupby("variant")[["roc_auc", "average_precision", "f1_at_original_cutoff", "f1_at_balanced_rate"]].mean().sort_values("roc_auc", ascending=False)
+metric_cols = ["roc_auc", "average_precision", "f1_at_original_cutoff", "f1_at_balanced_rate"]
+summary = metrics.groupby("variant")[metric_cols].mean().sort_values("roc_auc", ascending=False)
+top_auc = summary.head(10)
+bottom_auc = summary.tail(10)
+by_task = metrics.groupby("pairwise_task")[metric_cols].mean().sort_values("roc_auc", ascending=True)
+figures = [
+    ("ROC AUC", "figures/auc_by_variant_and_task.png"),
+    ("Average precision", "figures/ap_by_variant_and_task.png"),
+    ("F1 at original cutoff", "figures/f1_original_cutoff_by_variant.png"),
+    ("F1 at balanced rate", "figures/f1_balanced_rate_by_variant.png"),
+    ("Color shift", "figures/color_shift_by_variant.png"),
+]
 
 report = [
     "# Score-Pool Robustness Fallback Report",
@@ -481,24 +503,82 @@ report = [
     summary.round(4).reset_index().to_string(index=False),
     "```",
     "",
+    "## Hardest Pairwise Tasks",
+    "",
+    "```text",
+    by_task.round(4).reset_index().to_string(index=False),
+    "```",
+    "",
+    "## Top Variants by Mean ROC AUC",
+    "",
+    "```text",
+    top_auc.round(4).reset_index().to_string(index=False),
+    "```",
+    "",
+    "## Lowest Variants by Mean ROC AUC",
+    "",
+    "```text",
+    bottom_auc.round(4).reset_index().to_string(index=False),
+    "```",
+    "",
     "## Figures",
     "",
-    "- [ROC AUC](figures/auc_by_variant_and_task.png)",
-    "- [Average precision](figures/ap_by_variant_and_task.png)",
-    "- [F1 at original cutoff](figures/f1_original_cutoff_by_variant.png)",
-    "- [F1 at balanced rate](figures/f1_balanced_rate_by_variant.png)",
-    "- [Color shift](figures/color_shift_by_variant.png)",
+    *[f"- [{label}]({path})" for label, path in figures],
+    "",
+    "## Interpretation Notes",
+    "",
+    "- Compare `f1_at_original_cutoff` against `f1_at_balanced_rate` to separate calibration shift from ranking preservation.",
+    "- Use `full_rescore`, when run, as the practical noise floor for score and metric drift.",
+    "- Treat these as fallback-pool results, not exact official sampled-pool results.",
 ]
 (report_dir / "report.md").write_text("\n".join(report) + "\n")
+
+html_doc = f"""<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Score-Pool Robustness Fallback Report</title>
+  <style>
+    body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 32px; line-height: 1.45; color: #1f2933; }}
+    h1, h2 {{ color: #111827; }}
+    table {{ border-collapse: collapse; margin: 12px 0 28px; font-size: 13px; }}
+    th, td {{ border: 1px solid #d0d7de; padding: 6px 8px; text-align: right; }}
+    th:first-child, td:first-child {{ text-align: left; }}
+    th {{ background: #f6f8fa; }}
+    img {{ max-width: 100%; border: 1px solid #d0d7de; margin: 8px 0 24px; }}
+    code {{ background: #f6f8fa; padding: 2px 4px; border-radius: 4px; }}
+  </style>
+</head>
+<body>
+  <h1>Score-Pool Robustness Fallback Report</h1>
+  <p>Label source: <code>fallback_full_rescore_pool</code>.</p>
+  <p>Source C4 sequences: <code>{FALLBACK_C4_SEQS:,}</code><br>
+  Sample size per pool: <code>{FALLBACK_SAMPLE_SIZE:,}</code></p>
+  <h2>Mean Metrics by Variant</h2>
+  {summary.round(4).reset_index().to_html(index=False)}
+  <h2>Hardest Pairwise Tasks</h2>
+  {by_task.round(4).reset_index().to_html(index=False)}
+  <h2>Top Variants by Mean ROC AUC</h2>
+  {top_auc.round(4).reset_index().to_html(index=False)}
+  <h2>Lowest Variants by Mean ROC AUC</h2>
+  {bottom_auc.round(4).reset_index().to_html(index=False)}
+  <h2>Figures</h2>
+  {''.join(f'<h3>{html.escape(label)}</h3><img src="{html.escape(path)}" alt="{html.escape(label)}">' for label, path in figures)}
+  <h2>Interpretation Notes</h2>
+  <ul>
+    <li>Compare <code>f1_at_original_cutoff</code> against <code>f1_at_balanced_rate</code> to separate calibration shift from ranking preservation.</li>
+    <li>Use <code>full_rescore</code>, when run, as the practical noise floor for score and metric drift.</li>
+    <li>Treat these as fallback-pool results, not exact official sampled-pool results.</li>
+  </ul>
+</body>
+</html>
+"""
+(report_dir / "report.html").write_text(html_doc)
 print(report_dir / "report.md")
+print(report_dir / "report.html")
 ```
 
-Optional HTML conversion if `pandoc` is available:
-
-```python
-# PYTHON CELL
-!pandoc "{DRIVE}/reports/score-pool-robustness-fallback/report.md" -o "{DRIVE}/reports/score-pool-robustness-fallback/report.html" || true
-```
+No `pandoc` install is required.
 
 ## 13. Outputs to Bring Back Locally
 
