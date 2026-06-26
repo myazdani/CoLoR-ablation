@@ -350,6 +350,82 @@ os.environ["HUGGINGFACE_HUB_CACHE"] = f"{SCRATCH}/hf_home/hub"
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 ```
 
+Before launching the full streaming recovery, run a bounded download probe
+against real needed shards. This does not write the shard files to disk. It
+downloads only the first `64MiB` from up to four needed shards and estimates the
+total Step 7 transfer time from the observed aggregate throughput.
+
+```python
+# PYTHON CELL
+import concurrent.futures as cf
+import json
+import subprocess
+import time
+from pathlib import Path
+
+plan_path = Path(f"{DRIVE}/results/score-pool-robustness-official-500k/token_recovery_plan.json")
+plan = json.loads(plan_path.read_text())
+probe_files = plan["needed_files"][:4]
+repo_id = plan["repo_id"]
+total_bytes = int(plan["total_needed_bytes"])
+
+def hf_resolve_url(repo_id, path):
+    return f"https://huggingface.co/{repo_id}/resolve/main/{path}"
+
+def probe_file(item, byte_limit=64 * 1024 * 1024):
+    url = hf_resolve_url(repo_id, item["path"])
+    cmd = [
+        "curl",
+        "-L",
+        "-sS",
+        "--connect-timeout",
+        "20",
+        "--max-time",
+        "180",
+        "-r",
+        f"0-{byte_limit - 1}",
+        "-o",
+        "/dev/null",
+        "-w",
+        "http_code=%{http_code}\nsize_download=%{size_download}\nspeed_download=%{speed_download}\ntime_total=%{time_total}\n",
+        url,
+    ]
+    started = time.time()
+    proc = subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    row = {
+        "path": item["path"],
+        "returncode": proc.returncode,
+        "wall_seconds": time.time() - started,
+        "stderr": proc.stderr.strip(),
+    }
+    for line in proc.stdout.splitlines():
+        if "=" in line:
+            key, value = line.split("=", 1)
+            row[key] = value
+    return row
+
+started = time.time()
+with cf.ThreadPoolExecutor(max_workers=len(probe_files)) as executor:
+    probe_rows = list(executor.map(probe_file, probe_files))
+wall_seconds = time.time() - started
+downloaded = sum(int(float(row.get("size_download", 0))) for row in probe_rows)
+aggregate_bps = downloaded / wall_seconds if wall_seconds else 0.0
+
+print(json.dumps(probe_rows, indent=2))
+print(f"probe downloaded: {downloaded / 1024**2:.1f} MiB")
+print(f"probe wall time:  {wall_seconds:.1f} sec")
+print(f"aggregate speed:  {aggregate_bps / 1024**2:.2f} MiB/s")
+if aggregate_bps <= 0:
+    raise RuntimeError("Probe downloaded zero bytes; check network/HF access before Step 7")
+eta_hours = total_bytes / aggregate_bps / 3600
+print(f"estimated Step 7 transfer time for {total_bytes / 1024**3:.2f} GiB: {eta_hours:.2f} hours")
+```
+
+Interpret the estimate conservatively. Full recovery also spends time opening
+memmaps, copying rows, flushing the recovered token matrix to Drive, and
+deleting shard files. If the probe estimates `N` hours, a practical Step 7
+budget is roughly `N * 1.1` to `N * 1.3`.
+
 ```python
 # PYTHON CELL
 !python scripts/09_recover_score_pool_tokens.py \
