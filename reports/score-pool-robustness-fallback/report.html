@@ -1,465 +1,941 @@
-<!doctype html>
-<html>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="" xml:lang="">
 <head>
-  <meta charset="utf-8">
-  <title>Score-Pool Robustness Fallback Report</title>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>A Stress Test for Layer-Ablated CoLoR Scoring on Score-Defined Pools</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 32px; line-height: 1.45; color: #1f2933; }
-    h1, h2 { color: #111827; }
-    table { border-collapse: collapse; margin: 12px 0 28px; font-size: 13px; }
-    th, td { border: 1px solid #d0d7de; padding: 6px 8px; text-align: right; }
-    th:first-child, td:first-child { text-align: left; }
-    th { background: #f6f8fa; }
-    img { max-width: 100%; border: 1px solid #d0d7de; margin: 8px 0 24px; }
-    code { background: #f6f8fa; padding: 2px 4px; border-radius: 4px; }
+    html {
+      line-height: 1.5;
+      font-family: Georgia, serif;
+      font-size: 20px;
+      color: #1a1a1a;
+      background-color: #fdfdfd;
+    }
+    body {
+      margin: 0 auto;
+      max-width: 36em;
+      padding-left: 50px;
+      padding-right: 50px;
+      padding-top: 50px;
+      padding-bottom: 50px;
+      hyphens: auto;
+      word-wrap: break-word;
+      text-rendering: optimizeLegibility;
+      font-kerning: normal;
+    }
+    @media (max-width: 600px) {
+      body {
+        font-size: 0.9em;
+        padding: 1em;
+      }
+    }
+    @media print {
+      body {
+        background-color: transparent;
+        color: black;
+        font-size: 12pt;
+      }
+      p, h2, h3 {
+        orphans: 3;
+        widows: 3;
+      }
+      h2, h3, h4 {
+        page-break-after: avoid;
+      }
+    }
+    p {
+      margin: 1em 0;
+    }
+    a {
+      color: #1a1a1a;
+    }
+    a:visited {
+      color: #1a1a1a;
+    }
+    img {
+      max-width: 100%;
+    }
+    h1, h2, h3, h4, h5, h6 {
+      margin-top: 1.4em;
+    }
+    h5, h6 {
+      font-size: 1em;
+      font-style: italic;
+    }
+    h6 {
+      font-weight: normal;
+    }
+    ol, ul {
+      padding-left: 1.7em;
+      margin-top: 1em;
+    }
+    li > ol, li > ul {
+      margin-top: 0;
+    }
+    blockquote {
+      margin: 1em 0 1em 1.7em;
+      padding-left: 1em;
+      border-left: 2px solid #e6e6e6;
+      color: #606060;
+    }
+    code {
+      font-family: Menlo, Monaco, 'Lucida Console', Consolas, monospace;
+      font-size: 85%;
+      margin: 0;
+    }
+    pre {
+      margin: 1em 0;
+      overflow: auto;
+    }
+    pre code {
+      padding: 0;
+      overflow: visible;
+    }
+    .sourceCode {
+     background-color: transparent;
+     overflow: visible;
+    }
+    hr {
+      background-color: #1a1a1a;
+      border: none;
+      height: 1px;
+      margin: 1em 0;
+    }
+    table {
+      margin: 1em 0;
+      border-collapse: collapse;
+      width: 100%;
+      overflow-x: auto;
+      display: block;
+      font-variant-numeric: lining-nums tabular-nums;
+    }
+    table caption {
+      margin-bottom: 0.75em;
+    }
+    tbody {
+      margin-top: 0.5em;
+      border-top: 1px solid #1a1a1a;
+      border-bottom: 1px solid #1a1a1a;
+    }
+    th {
+      border-top: 1px solid #1a1a1a;
+      padding: 0.25em 0.5em 0.25em 0.5em;
+    }
+    td {
+      padding: 0.125em 0.5em 0.25em 0.5em;
+    }
+    header {
+      margin-bottom: 4em;
+      text-align: center;
+    }
+    #TOC li {
+      list-style: none;
+    }
+    #TOC a:not(:hover) {
+      text-decoration: none;
+    }
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    span.underline{text-decoration: underline;}
+    div.column{display: inline-block; vertical-align: top; width: 50%;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    ul.task-list{list-style: none;}
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
   </style>
+  <!--[if lt IE 9]>
+    <script src="//cdnjs.cloudflare.com/ajax/libs/html5shiv/3.7.3/html5shiv-printshiv.min.js"></script>
+  <![endif]-->
 </head>
 <body>
-  <h1>Score-Pool Robustness Fallback Report</h1>
-  <p>Label source: <code>fallback_full_rescore_pool</code>.</p>
-  <p>Source C4 sequences: <code>500,000</code><br>
-  Sample size per pool: <code>5,000</code></p>
-  <h2>Mean Metrics by Variant</h2>
-  <table border="1" class="dataframe">
-  <thead>
-    <tr style="text-align: right;">
-      <th>variant</th>
-      <th>roc_auc</th>
-      <th>average_precision</th>
-      <th>f1_at_original_cutoff</th>
-      <th>f1_at_balanced_rate</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td>full_rescore</td>
-      <td>1.0000</td>
-      <td>1.0000</td>
-      <td>1.0000</td>
-      <td>1.0000</td>
-    </tr>
-    <tr>
-      <td>full</td>
-      <td>1.0000</td>
-      <td>1.0000</td>
-      <td>1.0000</td>
-      <td>1.0000</td>
-    </tr>
-    <tr>
-      <td>pair_mid2</td>
-      <td>0.8868</td>
-      <td>0.8988</td>
-      <td>0.7336</td>
-      <td>0.8315</td>
-    </tr>
-    <tr>
-      <td>pair_top1</td>
-      <td>0.8344</td>
-      <td>0.8426</td>
-      <td>0.7665</td>
-      <td>0.7732</td>
-    </tr>
-    <tr>
-      <td>pair_mid4</td>
-      <td>0.8210</td>
-      <td>0.8259</td>
-      <td>0.3964</td>
-      <td>0.7684</td>
-    </tr>
-    <tr>
-      <td>pair_top2</td>
-      <td>0.7948</td>
-      <td>0.7938</td>
-      <td>0.7425</td>
-      <td>0.7324</td>
-    </tr>
-    <tr>
-      <td>pair_top6</td>
-      <td>0.7740</td>
-      <td>0.7792</td>
-      <td>0.6663</td>
-      <td>0.7193</td>
-    </tr>
-    <tr>
-      <td>marg_top1_only</td>
-      <td>0.7730</td>
-      <td>0.7635</td>
-      <td>0.6683</td>
-      <td>0.7269</td>
-    </tr>
-    <tr>
-      <td>marg_top2_only</td>
-      <td>0.7378</td>
-      <td>0.7327</td>
-      <td>0.6668</td>
-      <td>0.6896</td>
-    </tr>
-    <tr>
-      <td>pair_bot1</td>
-      <td>0.7122</td>
-      <td>0.7047</td>
-      <td>0.6932</td>
-      <td>0.6689</td>
-    </tr>
-    <tr>
-      <td>marg_top4_only</td>
-      <td>0.7035</td>
-      <td>0.6554</td>
-      <td>0.6667</td>
-      <td>0.6591</td>
-    </tr>
-    <tr>
-      <td>marg_top6_only</td>
-      <td>0.6931</td>
-      <td>0.6562</td>
-      <td>0.6667</td>
-      <td>0.6554</td>
-    </tr>
-    <tr>
-      <td>pair_bot2</td>
-      <td>0.6887</td>
-      <td>0.6791</td>
-      <td>0.6672</td>
-      <td>0.6499</td>
-    </tr>
-    <tr>
-      <td>pair_top4</td>
-      <td>0.6781</td>
-      <td>0.6699</td>
-      <td>0.2825</td>
-      <td>0.6343</td>
-    </tr>
-    <tr>
-      <td>cond_top1_only</td>
-      <td>0.6752</td>
-      <td>0.6681</td>
-      <td>0.0088</td>
-      <td>0.6322</td>
-    </tr>
-    <tr>
-      <td>cond_bot6_marg_top6</td>
-      <td>0.6283</td>
-      <td>0.6295</td>
-      <td>NaN</td>
-      <td>0.5989</td>
-    </tr>
-    <tr>
-      <td>cond_bot1_marg_top1</td>
-      <td>0.6214</td>
-      <td>0.6142</td>
-      <td>NaN</td>
-      <td>0.5991</td>
-    </tr>
-    <tr>
-      <td>cond_bot2_marg_top2</td>
-      <td>0.6127</td>
-      <td>0.6117</td>
-      <td>0.0004</td>
-      <td>0.5937</td>
-    </tr>
-    <tr>
-      <td>cond_bot4_marg_top4</td>
-      <td>0.6050</td>
-      <td>0.6038</td>
-      <td>0.0004</td>
-      <td>0.5816</td>
-    </tr>
-    <tr>
-      <td>cond_top2_only</td>
-      <td>0.6040</td>
-      <td>0.6049</td>
-      <td>0.0004</td>
-      <td>0.5730</td>
-    </tr>
-    <tr>
-      <td>pair_bot4</td>
-      <td>0.5730</td>
-      <td>0.5827</td>
-      <td>0.6503</td>
-      <td>0.5519</td>
-    </tr>
-    <tr>
-      <td>pair_bot6</td>
-      <td>0.5564</td>
-      <td>0.5525</td>
-      <td>0.6654</td>
-      <td>0.5381</td>
-    </tr>
-    <tr>
-      <td>cond_top6_only</td>
-      <td>0.5400</td>
-      <td>0.5467</td>
-      <td>NaN</td>
-      <td>0.5322</td>
-    </tr>
-    <tr>
-      <td>cond_top1_marg_bot1</td>
-      <td>0.5287</td>
-      <td>0.5281</td>
-      <td>0.6667</td>
-      <td>0.5225</td>
-    </tr>
-    <tr>
-      <td>cond_top4_only</td>
-      <td>0.5205</td>
-      <td>0.5260</td>
-      <td>NaN</td>
-      <td>0.5169</td>
-    </tr>
-    <tr>
-      <td>cond_top2_marg_bot2</td>
-      <td>0.5074</td>
-      <td>0.5178</td>
-      <td>0.6666</td>
-      <td>0.5000</td>
-    </tr>
-    <tr>
-      <td>cond_top4_marg_bot4</td>
-      <td>0.4870</td>
-      <td>0.5059</td>
-      <td>0.6667</td>
-      <td>0.4880</td>
-    </tr>
-    <tr>
-      <td>cond_top6_marg_bot6</td>
-      <td>0.4570</td>
-      <td>0.4842</td>
-      <td>0.6667</td>
-      <td>0.4657</td>
-    </tr>
-  </tbody>
+<header id="title-block-header">
+<h1 class="title">A Stress Test for Layer-Ablated CoLoR Scoring on Score-Defined Pools</h1>
+</header>
+<h1 id="a-stress-test-for-layer-ablated-color-scoring-on-score-defined-pools">A Stress Test for Layer-Ablated CoLoR Scoring on Score-Defined Pools</h1>
+<h2 id="abstract">Abstract</h2>
+<p>CoLoR filtering selects data by comparing a conditional model against a marginal or prior model. For the Books target, the paper-sign score is <code>conditional_books_loss - prior_loss</code>, and lower values are treated as more Books-like. This experiment asks whether that selection rule is robust when the conditional and marginal auxiliary models are ablated. The motivation is practical: if CoLoR filtering is only used as a heuristic for ranking candidate training examples, then we may not need the exact full auxiliary models to recover the same useful ordering.</p>
+<p>We construct five diagnostic pools from a 500,000-sequence fallback C4 source pool: random positives, hard positives, random negatives, hard negatives, and tail negatives. Labels are defined by the full-model CoLoR score, then each ablated model pair is evaluated on six balanced pairwise discrimination tasks. The strongest ablated result is <code>pair_mid2</code>, which removes layers <code>[5, 6]</code> from both models and reaches mean ROC AUC <code>0.8868</code>, average precision <code>0.8988</code>, and balanced-rate F1 <code>0.8315</code>. Paired layer removal is consistently more robust than asymmetric removal. The worst family is <code>cond_top_marg_bot</code>, where top layers are removed from the conditional Books model while bottom layers are removed from the marginal model; at larger removals this family falls to chance or below chance.</p>
+<p>The central takeaway is not that layer ablation is harmless. It is that the ranking signal is most recoverable when both auxiliary models are degraded in a matched way, especially around the middle layers. Asymmetric ablations can shift the CoLoR score scale so severely that the original cutoff becomes unusable, even when some ranking information remains after recalibration.</p>
+<h2 id="readers-guide">Reader’s Guide</h2>
+<p>This is a fallback-pool result, not the exact official 500K selected-index recovery result. The completed run followed <code>docs/SCORE_POOL_ROBUSTNESS_COLAB_RUNBOOK.md</code> and produced a 25,000-row diagnostic pool with 5,000 rows in each of five score-defined pools. The exact official-pool path is documented separately in <code>docs/SCORE_POOL_ROBUSTNESS_OFFICIAL_500K_COLAB_RUNBOOK.md</code>, but it was not the run analyzed here.</p>
+<p>The report is written like a small workshop note: it prioritizes motivation, method, interpretation, and failure modes over exhaustive tables.</p>
+<h2 id="background-and-motivation">Background and Motivation</h2>
+<p>CoLoR filtering is a targeted data-selection method. The basic idea is to score candidate C4 sequences by how much better they look under a conditional model adapted toward a target distribution than under a marginal model. In the Books case, the conditional model has been adapted toward Books-like data, while the marginal model represents the broader prior. With the paper-sign convention,</p>
+<pre class="text"><code>CoLoR score = conditional_books_loss - prior_loss</code></pre>
+<p>lower scores are better. A very low score means the conditional Books model assigns the sequence relatively lower loss than the marginal model does, so the sequence is more Books-like according to this heuristic.</p>
+<p>The heuristic nature of this score is important. CoLoR is not an oracle label for semantic Books membership. It is a model-derived ranking rule used to choose data at scale. That suggests a robustness question: if we damage or simplify the auxiliary models, does the score still separate the same useful examples from nearby non-selected examples? If yes, then the selection procedure may be less brittle than the exact full-model score would imply. If no, then the particular conditional/marginal pair and its late-layer representation are doing essential work.</p>
+<p>The previous layer-ablation report studied overlap in selected sets when the same layers were removed from both auxiliary models. This experiment broadens the question. We explicitly test symmetric removals, asymmetric removals, and one-sided removals on score-defined positive and negative pools.</p>
+<h2 id="hypothesis">Hypothesis</h2>
+<p>The working hypothesis is:</p>
+<blockquote>
+<p>Because CoLoR selection is based on a heuristic score rather than a ground truth semantic label, ablated auxiliary models may preserve enough ranking information to remain useful for discrimination between selected and non-selected regions of the score distribution.</p>
+</blockquote>
+<p>This hypothesis has two parts. The first is about ranking robustness: positives should still receive lower ablated CoLoR scores than negatives. The second is about calibration robustness: the original full-model cutoff should still be a usable threshold after ablation. The experiment shows that these two properties separate. Several variants retain nontrivial ranking signal, but their score scale shifts enough that the original cutoff is no longer reliable.</p>
+<h2 id="experimental-design">Experimental Design</h2>
+<h3 id="source-pool">Source Pool</h3>
+<p>The fallback source pool contains <code>500,000</code> C4 sequences. The full unablated Books conditional and marginal models were scored on this source pool. We then used the resulting full CoLoR scores to define the diagnostic pools.</p>
+<p>The final scored evaluation pool contains <code>25,000</code> sequences:</p>
+<table>
+<colgroup>
+<col style="width: 25%" />
+<col style="width: 25%" />
+<col style="width: 25%" />
+<col style="width: 25%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th style="text-align: left;">pool</th>
+<th style="text-align: right;">count</th>
+<th style="text-align: left;">score rule</th>
+<th style="text-align: left;">full-score range</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;">random positive</td>
+<td style="text-align: right;">5,000</td>
+<td style="text-align: left;">random examples below the tau=64-like positive cutoff</td>
+<td style="text-align: left;"><code>[-0.3251, 0.3444]</code>, mean <code>0.2263</code></td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">hard positive</td>
+<td style="text-align: right;">5,000</td>
+<td style="text-align: left;">examples just below the positive cutoff</td>
+<td style="text-align: left;"><code>[0.2311, 0.3444]</code>, mean <code>0.2999</code></td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">random negative</td>
+<td style="text-align: right;">5,000</td>
+<td style="text-align: left;">random examples in the tau=64 to tau=32 band</td>
+<td style="text-align: left;"><code>[0.3444, 0.4071]</code>, mean <code>0.3794</code></td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">hard negative</td>
+<td style="text-align: right;">5,000</td>
+<td style="text-align: left;">examples just above the positive cutoff</td>
+<td style="text-align: left;"><code>[0.3444, 0.3899]</code>, mean <code>0.3691</code></td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">tail negative</td>
+<td style="text-align: right;">5,000</td>
+<td style="text-align: left;">random examples outside the positive set</td>
+<td style="text-align: left;"><code>[0.3511, 3.1167]</code>, mean <code>0.7193</code></td>
+</tr>
+</tbody>
 </table>
-  <h2>Hardest Pairwise Tasks</h2>
-  <table border="1" class="dataframe">
-  <thead>
-    <tr style="text-align: right;">
-      <th>pairwise_task</th>
-      <th>roc_auc</th>
-      <th>average_precision</th>
-      <th>f1_at_original_cutoff</th>
-      <th>f1_at_balanced_rate</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td>hp_vs_hn</td>
-      <td>0.6047</td>
-      <td>0.6003</td>
-      <td>0.5467</td>
-      <td>0.5876</td>
-    </tr>
-    <tr>
-      <td>hp_vs_rn</td>
-      <td>0.6148</td>
-      <td>0.6088</td>
-      <td>0.5484</td>
-      <td>0.5957</td>
-    </tr>
-    <tr>
-      <td>rp_vs_hn</td>
-      <td>0.6482</td>
-      <td>0.6484</td>
-      <td>0.6523</td>
-      <td>0.6212</td>
-    </tr>
-    <tr>
-      <td>rp_vs_rn</td>
-      <td>0.6565</td>
-      <td>0.6550</td>
-      <td>0.6544</td>
-      <td>0.6278</td>
-    </tr>
-    <tr>
-      <td>hp_vs_tn</td>
-      <td>0.7661</td>
-      <td>0.7663</td>
-      <td>0.5693</td>
-      <td>0.7256</td>
-    </tr>
-    <tr>
-      <td>rp_vs_tn</td>
-      <td>0.7842</td>
-      <td>0.7879</td>
-      <td>0.6792</td>
-      <td>0.7428</td>
-    </tr>
-  </tbody>
+<p>The fallback positive cutoff is <code>0.3444314003</code>. The fallback negative-band cutoff is <code>0.4070763588</code>.</p>
+<h3 id="why-these-pools">Why These Pools?</h3>
+<p>The pools are designed to separate easy and hard cases.</p>
+<p>Random positives and tail negatives are relatively easy: they often come from well-separated parts of the full-score distribution. Hard positives and hard negatives are difficult: they sit close to the decision boundary and ask whether an ablated model can preserve the fine ordering near the original cutoff. Random negatives occupy the intermediate band between the tau=64-like positive tail and the tau=32-like broader selected region.</p>
+<p>This means the same ablated score is evaluated against both coarse ranking tasks and boundary-sensitive ranking tasks.</p>
+<h3 id="pairwise-tasks">Pairwise Tasks</h3>
+<p>We evaluate six balanced binary tasks. In each task, the positive class is one of the positive pools, and the negative class is one of the negative pools:</p>
+<table>
+<colgroup>
+<col style="width: 25%" />
+<col style="width: 25%" />
+<col style="width: 25%" />
+<col style="width: 25%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th style="text-align: left;">task</th>
+<th style="text-align: left;">positive pool</th>
+<th style="text-align: left;">negative pool</th>
+<th style="text-align: left;">interpretation</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;"><code>hp_vs_hn</code></td>
+<td style="text-align: left;">hard positive</td>
+<td style="text-align: left;">hard negative</td>
+<td style="text-align: left;">tight boundary test</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>hp_vs_rn</code></td>
+<td style="text-align: left;">hard positive</td>
+<td style="text-align: left;">random negative</td>
+<td style="text-align: left;">hard positives against tau=32-band negatives</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>hp_vs_tn</code></td>
+<td style="text-align: left;">hard positive</td>
+<td style="text-align: left;">tail negative</td>
+<td style="text-align: left;">hard positives against broad tail negatives</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>rp_vs_hn</code></td>
+<td style="text-align: left;">random positive</td>
+<td style="text-align: left;">hard negative</td>
+<td style="text-align: left;">random positives against boundary negatives</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>rp_vs_rn</code></td>
+<td style="text-align: left;">random positive</td>
+<td style="text-align: left;">random negative</td>
+<td style="text-align: left;">random positives against tau=32-band negatives</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>rp_vs_tn</code></td>
+<td style="text-align: left;">random positive</td>
+<td style="text-align: left;">tail negative</td>
+<td style="text-align: left;">easiest broad separation test</td>
+</tr>
+</tbody>
 </table>
-  <h2>Top Variants by Mean ROC AUC</h2>
-  <table border="1" class="dataframe">
-  <thead>
-    <tr style="text-align: right;">
-      <th>variant</th>
-      <th>roc_auc</th>
-      <th>average_precision</th>
-      <th>f1_at_original_cutoff</th>
-      <th>f1_at_balanced_rate</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td>full_rescore</td>
-      <td>1.0000</td>
-      <td>1.0000</td>
-      <td>1.0000</td>
-      <td>1.0000</td>
-    </tr>
-    <tr>
-      <td>full</td>
-      <td>1.0000</td>
-      <td>1.0000</td>
-      <td>1.0000</td>
-      <td>1.0000</td>
-    </tr>
-    <tr>
-      <td>pair_mid2</td>
-      <td>0.8868</td>
-      <td>0.8988</td>
-      <td>0.7336</td>
-      <td>0.8315</td>
-    </tr>
-    <tr>
-      <td>pair_top1</td>
-      <td>0.8344</td>
-      <td>0.8426</td>
-      <td>0.7665</td>
-      <td>0.7732</td>
-    </tr>
-    <tr>
-      <td>pair_mid4</td>
-      <td>0.8210</td>
-      <td>0.8259</td>
-      <td>0.3964</td>
-      <td>0.7684</td>
-    </tr>
-    <tr>
-      <td>pair_top2</td>
-      <td>0.7948</td>
-      <td>0.7938</td>
-      <td>0.7425</td>
-      <td>0.7324</td>
-    </tr>
-    <tr>
-      <td>pair_top6</td>
-      <td>0.7740</td>
-      <td>0.7792</td>
-      <td>0.6663</td>
-      <td>0.7193</td>
-    </tr>
-    <tr>
-      <td>marg_top1_only</td>
-      <td>0.7730</td>
-      <td>0.7635</td>
-      <td>0.6683</td>
-      <td>0.7269</td>
-    </tr>
-    <tr>
-      <td>marg_top2_only</td>
-      <td>0.7378</td>
-      <td>0.7327</td>
-      <td>0.6668</td>
-      <td>0.6896</td>
-    </tr>
-    <tr>
-      <td>pair_bot1</td>
-      <td>0.7122</td>
-      <td>0.7047</td>
-      <td>0.6932</td>
-      <td>0.6689</td>
-    </tr>
-  </tbody>
+<p>Each task has <code>5,000</code> positives and <code>5,000</code> negatives.</p>
+<h2 id="model-variants">Model Variants</h2>
+<p>The auxiliary models have 12 transformer blocks indexed from bottom to top as layers <code>0</code> through <code>11</code>. We evaluate four broad ablation families:</p>
+<table>
+<colgroup>
+<col style="width: 33%" />
+<col style="width: 33%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th style="text-align: left;">family</th>
+<th style="text-align: left;">definition</th>
+<th style="text-align: left;">intuition</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;"><code>baseline</code></td>
+<td style="text-align: left;">no removed layers</td>
+<td style="text-align: left;">sanity check and noise floor</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>paired</code></td>
+<td style="text-align: left;">remove the same layers from both conditional and marginal models</td>
+<td style="text-align: left;">degrade both score components similarly</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>cond_top_marg_bot</code></td>
+<td style="text-align: left;">remove top conditional layers and bottom marginal layers</td>
+<td style="text-align: left;">intentionally asymmetric damage</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>cond_bot_marg_top</code></td>
+<td style="text-align: left;">remove bottom conditional layers and top marginal layers</td>
+<td style="text-align: left;">opposite asymmetric damage</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>cond_only</code></td>
+<td style="text-align: left;">remove top layers only from the conditional Books model</td>
+<td style="text-align: left;">test conditional-side sensitivity</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>marg_only</code></td>
+<td style="text-align: left;">remove top layers only from the marginal model</td>
+<td style="text-align: left;">test marginal-side sensitivity</td>
+</tr>
+</tbody>
 </table>
-  <h2>Lowest Variants by Mean ROC AUC</h2>
-  <table border="1" class="dataframe">
-  <thead>
-    <tr style="text-align: right;">
-      <th>variant</th>
-      <th>roc_auc</th>
-      <th>average_precision</th>
-      <th>f1_at_original_cutoff</th>
-      <th>f1_at_balanced_rate</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td>cond_bot4_marg_top4</td>
-      <td>0.6050</td>
-      <td>0.6038</td>
-      <td>0.0004</td>
-      <td>0.5816</td>
-    </tr>
-    <tr>
-      <td>cond_top2_only</td>
-      <td>0.6040</td>
-      <td>0.6049</td>
-      <td>0.0004</td>
-      <td>0.5730</td>
-    </tr>
-    <tr>
-      <td>pair_bot4</td>
-      <td>0.5730</td>
-      <td>0.5827</td>
-      <td>0.6503</td>
-      <td>0.5519</td>
-    </tr>
-    <tr>
-      <td>pair_bot6</td>
-      <td>0.5564</td>
-      <td>0.5525</td>
-      <td>0.6654</td>
-      <td>0.5381</td>
-    </tr>
-    <tr>
-      <td>cond_top6_only</td>
-      <td>0.5400</td>
-      <td>0.5467</td>
-      <td>NaN</td>
-      <td>0.5322</td>
-    </tr>
-    <tr>
-      <td>cond_top1_marg_bot1</td>
-      <td>0.5287</td>
-      <td>0.5281</td>
-      <td>0.6667</td>
-      <td>0.5225</td>
-    </tr>
-    <tr>
-      <td>cond_top4_only</td>
-      <td>0.5205</td>
-      <td>0.5260</td>
-      <td>NaN</td>
-      <td>0.5169</td>
-    </tr>
-    <tr>
-      <td>cond_top2_marg_bot2</td>
-      <td>0.5074</td>
-      <td>0.5178</td>
-      <td>0.6666</td>
-      <td>0.5000</td>
-    </tr>
-    <tr>
-      <td>cond_top4_marg_bot4</td>
-      <td>0.4870</td>
-      <td>0.5059</td>
-      <td>0.6667</td>
-      <td>0.4880</td>
-    </tr>
-    <tr>
-      <td>cond_top6_marg_bot6</td>
-      <td>0.4570</td>
-      <td>0.4842</td>
-      <td>0.6667</td>
-      <td>0.4657</td>
-    </tr>
-  </tbody>
+<p>The paired family includes top, middle, and bottom deletions. The asymmetric and one-sided families focus on top/bottom combinations because the question is whether conditional and marginal model damage must be matched to preserve the difference score.</p>
+<h2 id="metrics">Metrics</h2>
+<p>For each pairwise task we compute:</p>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th style="text-align: left;">metric</th>
+<th style="text-align: left;">what it measures</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;">ROC AUC</td>
+<td style="text-align: left;">ranking quality of <code>-ablated_color_score</code>; higher means positives tend to have lower ablated CoLoR scores</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">average precision</td>
+<td style="text-align: left;">precision-recall ranking quality under balanced pairwise labels</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">F1 at original cutoff</td>
+<td style="text-align: left;">thresholded classification using the original full-model positive cutoff</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">F1 at balanced rate</td>
+<td style="text-align: left;">thresholded classification after choosing the ablated-score threshold that selects exactly the known number of positives</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">score correlations</td>
+<td style="text-align: left;">Pearson and Spearman correlations between full and ablated scores</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">score shifts</td>
+<td style="text-align: left;">how far ablated conditional, prior, and CoLoR scores move from full-model scores</td>
+</tr>
+</tbody>
 </table>
-  <h2>Figures</h2>
-  <h3>ROC AUC</h3><img src="figures/auc_by_variant_and_task.png" alt="ROC AUC"><h3>Average precision</h3><img src="figures/ap_by_variant_and_task.png" alt="Average precision"><h3>F1 at original cutoff</h3><img src="figures/f1_original_cutoff_by_variant.png" alt="F1 at original cutoff"><h3>F1 at balanced rate</h3><img src="figures/f1_balanced_rate_by_variant.png" alt="F1 at balanced rate"><h3>Color shift</h3><img src="figures/color_shift_by_variant.png" alt="Color shift">
-  <h2>Interpretation Notes</h2>
-  <ul>
-    <li>Compare <code>f1_at_original_cutoff</code> against <code>f1_at_balanced_rate</code> to separate calibration shift from ranking preservation.</li>
-    <li>Use <code>full_rescore</code>, when run, as the practical noise floor for score and metric drift.</li>
-    <li>Treat these as fallback-pool results, not exact official sampled-pool results.</li>
-  </ul>
+<p>The difference between the two F1 columns is important. F1 at the original cutoff tests whether the full-model threshold remains calibrated after ablation. F1 at balanced rate tests whether the ranking remains useful after a simple one-dimensional recalibration. If ROC AUC and balanced-rate F1 are good while original-cutoff F1 is poor, the ablation has not destroyed all ordering information, but it has moved the score scale.</p>
+<h2 id="sanity-checks">Sanity Checks</h2>
+<p>The <code>full</code> and <code>full_rescore</code> baselines both achieve perfect metrics:</p>
+<table>
+<thead>
+<tr class="header">
+<th style="text-align: left;">variant</th>
+<th style="text-align: right;">ROC AUC</th>
+<th style="text-align: right;">average precision</th>
+<th style="text-align: right;">F1 at original cutoff</th>
+<th style="text-align: right;">F1 at balanced rate</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;"><code>full</code></td>
+<td style="text-align: right;">1.0000</td>
+<td style="text-align: right;">1.0000</td>
+<td style="text-align: right;">1.0000</td>
+<td style="text-align: right;">1.0000</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>full_rescore</code></td>
+<td style="text-align: right;">1.0000</td>
+<td style="text-align: right;">1.0000</td>
+<td style="text-align: right;">1.0000</td>
+<td style="text-align: right;">1.0000</td>
+</tr>
+</tbody>
+</table>
+<p>This is expected because labels are defined from the full-model score. It is not a substantive result, but it is an important validation that the pool, score direction, and metric code are aligned.</p>
+<h2 id="main-results">Main Results</h2>
+<h3 id="mean-metrics-by-variant">Mean Metrics by Variant</h3>
+<p>The table below averages over all six pairwise tasks.</p>
+<table>
+<thead>
+<tr class="header">
+<th style="text-align: left;">variant</th>
+<th style="text-align: left;">family</th>
+<th style="text-align: right;">ROC AUC</th>
+<th style="text-align: right;">avg. precision</th>
+<th style="text-align: right;">F1 original cutoff</th>
+<th style="text-align: right;">F1 balanced rate</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;"><code>full</code></td>
+<td style="text-align: left;">baseline</td>
+<td style="text-align: right;">1.0000</td>
+<td style="text-align: right;">1.0000</td>
+<td style="text-align: right;">1.0000</td>
+<td style="text-align: right;">1.0000</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>full_rescore</code></td>
+<td style="text-align: left;">baseline</td>
+<td style="text-align: right;">1.0000</td>
+<td style="text-align: right;">1.0000</td>
+<td style="text-align: right;">1.0000</td>
+<td style="text-align: right;">1.0000</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>pair_mid2</code></td>
+<td style="text-align: left;">paired</td>
+<td style="text-align: right;">0.8868</td>
+<td style="text-align: right;">0.8988</td>
+<td style="text-align: right;">0.7336</td>
+<td style="text-align: right;">0.8315</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>pair_top1</code></td>
+<td style="text-align: left;">paired</td>
+<td style="text-align: right;">0.8344</td>
+<td style="text-align: right;">0.8426</td>
+<td style="text-align: right;">0.7665</td>
+<td style="text-align: right;">0.7732</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>pair_mid4</code></td>
+<td style="text-align: left;">paired</td>
+<td style="text-align: right;">0.8210</td>
+<td style="text-align: right;">0.8259</td>
+<td style="text-align: right;">0.3964</td>
+<td style="text-align: right;">0.7684</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>pair_top2</code></td>
+<td style="text-align: left;">paired</td>
+<td style="text-align: right;">0.7948</td>
+<td style="text-align: right;">0.7938</td>
+<td style="text-align: right;">0.7425</td>
+<td style="text-align: right;">0.7324</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>pair_top6</code></td>
+<td style="text-align: left;">paired</td>
+<td style="text-align: right;">0.7740</td>
+<td style="text-align: right;">0.7792</td>
+<td style="text-align: right;">0.6663</td>
+<td style="text-align: right;">0.7193</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>marg_top1_only</code></td>
+<td style="text-align: left;">marg_only</td>
+<td style="text-align: right;">0.7730</td>
+<td style="text-align: right;">0.7635</td>
+<td style="text-align: right;">0.6683</td>
+<td style="text-align: right;">0.7269</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>marg_top2_only</code></td>
+<td style="text-align: left;">marg_only</td>
+<td style="text-align: right;">0.7378</td>
+<td style="text-align: right;">0.7327</td>
+<td style="text-align: right;">0.6668</td>
+<td style="text-align: right;">0.6896</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>pair_bot1</code></td>
+<td style="text-align: left;">paired</td>
+<td style="text-align: right;">0.7122</td>
+<td style="text-align: right;">0.7047</td>
+<td style="text-align: right;">0.6932</td>
+<td style="text-align: right;">0.6689</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>marg_top4_only</code></td>
+<td style="text-align: left;">marg_only</td>
+<td style="text-align: right;">0.7035</td>
+<td style="text-align: right;">0.6554</td>
+<td style="text-align: right;">0.6667</td>
+<td style="text-align: right;">0.6591</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>marg_top6_only</code></td>
+<td style="text-align: left;">marg_only</td>
+<td style="text-align: right;">0.6931</td>
+<td style="text-align: right;">0.6562</td>
+<td style="text-align: right;">0.6667</td>
+<td style="text-align: right;">0.6554</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>pair_bot2</code></td>
+<td style="text-align: left;">paired</td>
+<td style="text-align: right;">0.6887</td>
+<td style="text-align: right;">0.6791</td>
+<td style="text-align: right;">0.6672</td>
+<td style="text-align: right;">0.6499</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>pair_top4</code></td>
+<td style="text-align: left;">paired</td>
+<td style="text-align: right;">0.6781</td>
+<td style="text-align: right;">0.6699</td>
+<td style="text-align: right;">0.2825</td>
+<td style="text-align: right;">0.6343</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>cond_top1_only</code></td>
+<td style="text-align: left;">cond_only</td>
+<td style="text-align: right;">0.6752</td>
+<td style="text-align: right;">0.6681</td>
+<td style="text-align: right;">0.0088</td>
+<td style="text-align: right;">0.6322</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>cond_bot6_marg_top6</code></td>
+<td style="text-align: left;">cond_bot_marg_top</td>
+<td style="text-align: right;">0.6283</td>
+<td style="text-align: right;">0.6295</td>
+<td style="text-align: right;">NaN</td>
+<td style="text-align: right;">0.5989</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>cond_bot1_marg_top1</code></td>
+<td style="text-align: left;">cond_bot_marg_top</td>
+<td style="text-align: right;">0.6214</td>
+<td style="text-align: right;">0.6142</td>
+<td style="text-align: right;">NaN</td>
+<td style="text-align: right;">0.5991</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>cond_bot2_marg_top2</code></td>
+<td style="text-align: left;">cond_bot_marg_top</td>
+<td style="text-align: right;">0.6127</td>
+<td style="text-align: right;">0.6117</td>
+<td style="text-align: right;">0.0004</td>
+<td style="text-align: right;">0.5937</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>cond_bot4_marg_top4</code></td>
+<td style="text-align: left;">cond_bot_marg_top</td>
+<td style="text-align: right;">0.6050</td>
+<td style="text-align: right;">0.6038</td>
+<td style="text-align: right;">0.0004</td>
+<td style="text-align: right;">0.5816</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>cond_top2_only</code></td>
+<td style="text-align: left;">cond_only</td>
+<td style="text-align: right;">0.6040</td>
+<td style="text-align: right;">0.6049</td>
+<td style="text-align: right;">0.0004</td>
+<td style="text-align: right;">0.5730</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>pair_bot4</code></td>
+<td style="text-align: left;">paired</td>
+<td style="text-align: right;">0.5730</td>
+<td style="text-align: right;">0.5827</td>
+<td style="text-align: right;">0.6503</td>
+<td style="text-align: right;">0.5519</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>pair_bot6</code></td>
+<td style="text-align: left;">paired</td>
+<td style="text-align: right;">0.5564</td>
+<td style="text-align: right;">0.5525</td>
+<td style="text-align: right;">0.6654</td>
+<td style="text-align: right;">0.5381</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>cond_top6_only</code></td>
+<td style="text-align: left;">cond_only</td>
+<td style="text-align: right;">0.5400</td>
+<td style="text-align: right;">0.5467</td>
+<td style="text-align: right;">NaN</td>
+<td style="text-align: right;">0.5322</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>cond_top1_marg_bot1</code></td>
+<td style="text-align: left;">cond_top_marg_bot</td>
+<td style="text-align: right;">0.5287</td>
+<td style="text-align: right;">0.5281</td>
+<td style="text-align: right;">0.6667</td>
+<td style="text-align: right;">0.5225</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>cond_top4_only</code></td>
+<td style="text-align: left;">cond_only</td>
+<td style="text-align: right;">0.5205</td>
+<td style="text-align: right;">0.5260</td>
+<td style="text-align: right;">NaN</td>
+<td style="text-align: right;">0.5169</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>cond_top2_marg_bot2</code></td>
+<td style="text-align: left;">cond_top_marg_bot</td>
+<td style="text-align: right;">0.5074</td>
+<td style="text-align: right;">0.5178</td>
+<td style="text-align: right;">0.6666</td>
+<td style="text-align: right;">0.5000</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>cond_top4_marg_bot4</code></td>
+<td style="text-align: left;">cond_top_marg_bot</td>
+<td style="text-align: right;">0.4870</td>
+<td style="text-align: right;">0.5059</td>
+<td style="text-align: right;">0.6667</td>
+<td style="text-align: right;">0.4880</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>cond_top6_marg_bot6</code></td>
+<td style="text-align: left;">cond_top_marg_bot</td>
+<td style="text-align: right;">0.4570</td>
+<td style="text-align: right;">0.4842</td>
+<td style="text-align: right;">0.6667</td>
+<td style="text-align: right;">0.4657</td>
+</tr>
+</tbody>
+</table>
+<p>The best non-baseline result is <code>pair_mid2</code>. It wins every pairwise task among ablated variants, including both boundary tasks and easier tail-negative tasks.</p>
+<h3 id="family-level-summary">Family-Level Summary</h3>
+<table>
+<thead>
+<tr class="header">
+<th style="text-align: left;">family</th>
+<th style="text-align: right;">ROC AUC</th>
+<th style="text-align: right;">average precision</th>
+<th style="text-align: right;">F1 original cutoff</th>
+<th style="text-align: right;">F1 balanced rate</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;"><code>baseline</code></td>
+<td style="text-align: right;">1.0000</td>
+<td style="text-align: right;">1.0000</td>
+<td style="text-align: right;">1.0000</td>
+<td style="text-align: right;">1.0000</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>paired</code></td>
+<td style="text-align: right;">0.7319</td>
+<td style="text-align: right;">0.7329</td>
+<td style="text-align: right;">0.6264</td>
+<td style="text-align: right;">0.6868</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>marg_only</code></td>
+<td style="text-align: right;">0.7269</td>
+<td style="text-align: right;">0.7019</td>
+<td style="text-align: right;">0.6671</td>
+<td style="text-align: right;">0.6827</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>cond_bot_marg_top</code></td>
+<td style="text-align: right;">0.6168</td>
+<td style="text-align: right;">0.6148</td>
+<td style="text-align: right;">0.0004</td>
+<td style="text-align: right;">0.5933</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>cond_only</code></td>
+<td style="text-align: right;">0.5849</td>
+<td style="text-align: right;">0.5864</td>
+<td style="text-align: right;">0.0060</td>
+<td style="text-align: right;">0.5636</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>cond_top_marg_bot</code></td>
+<td style="text-align: right;">0.4950</td>
+<td style="text-align: right;">0.5090</td>
+<td style="text-align: right;">0.6667</td>
+<td style="text-align: right;">0.4941</td>
+</tr>
+</tbody>
+</table>
+<p>This table is the clearest high-level result. Paired removals and marginal-only top removals preserve the most ranking information. Conditional-only top removals are much worse. The asymmetric <code>cond_top_marg_bot</code> family is the most damaging and can invert the intended ranking.</p>
+<h2 id="figures">Figures</h2>
+<figure>
+<img src="figures/auc_by_variant_and_task.png" alt="ROC AUC by variant and pairwise task. The paired middle-layer deletion is the strongest ablated variant across all tasks." /><figcaption aria-hidden="true">ROC AUC by variant and pairwise task. The paired middle-layer deletion is the strongest ablated variant across all tasks.</figcaption>
+</figure>
+<figure>
+<img src="figures/ap_by_variant_and_task.png" alt="Average precision by variant and task. The same pattern as ROC AUC appears: paired and marginal-only variants dominate conditional-heavy asymmetric variants." /><figcaption aria-hidden="true">Average precision by variant and task. The same pattern as ROC AUC appears: paired and marginal-only variants dominate conditional-heavy asymmetric variants.</figcaption>
+</figure>
+<figure>
+<img src="figures/f1_original_cutoff_by_variant.png" alt="F1 at the original full-model cutoff. Several ablations fail here because their score scale shifts away from the full-model tau=64-like threshold." /><figcaption aria-hidden="true">F1 at the original full-model cutoff. Several ablations fail here because their score scale shifts away from the full-model tau=64-like threshold.</figcaption>
+</figure>
+<figure>
+<img src="figures/f1_balanced_rate_by_variant.png" alt="F1 after balanced-rate recalibration. This view shows the residual ranking information after choosing a threshold that selects the same number of positives as the task." /><figcaption aria-hidden="true">F1 after balanced-rate recalibration. This view shows the residual ranking information after choosing a threshold that selects the same number of positives as the task.</figcaption>
+</figure>
+<figure>
+<img src="figures/color_shift_by_variant.png" alt="Color-score shift by variant. Large positive or negative shifts explain why original-cutoff F1 can collapse even when ranking metrics remain above chance." /><figcaption aria-hidden="true">Color-score shift by variant. Large positive or negative shifts explain why original-cutoff F1 can collapse even when ranking metrics remain above chance.</figcaption>
+</figure>
+<figure>
+<img src="figures/ablated_vs_full_color_scatter_sample.png" alt="Ablated versus full CoLoR scores for a sampled subset. Deviations from the diagonal indicate score drift; the useful variants preserve ordering more than absolute calibration." /><figcaption aria-hidden="true">Ablated versus full CoLoR scores for a sampled subset. Deviations from the diagonal indicate score drift; the useful variants preserve ordering more than absolute calibration.</figcaption>
+</figure>
+<h2 id="task-difficulty">Task Difficulty</h2>
+<p>Averaging over variants, the hardest tasks are the boundary tasks:</p>
+<table>
+<thead>
+<tr class="header">
+<th style="text-align: left;">task</th>
+<th style="text-align: right;">ROC AUC</th>
+<th style="text-align: right;">average precision</th>
+<th style="text-align: right;">F1 original cutoff</th>
+<th style="text-align: right;">F1 balanced rate</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;"><code>hp_vs_hn</code></td>
+<td style="text-align: right;">0.6047</td>
+<td style="text-align: right;">0.6003</td>
+<td style="text-align: right;">0.5467</td>
+<td style="text-align: right;">0.5876</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>hp_vs_rn</code></td>
+<td style="text-align: right;">0.6148</td>
+<td style="text-align: right;">0.6088</td>
+<td style="text-align: right;">0.5484</td>
+<td style="text-align: right;">0.5957</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>rp_vs_hn</code></td>
+<td style="text-align: right;">0.6482</td>
+<td style="text-align: right;">0.6484</td>
+<td style="text-align: right;">0.6523</td>
+<td style="text-align: right;">0.6212</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>rp_vs_rn</code></td>
+<td style="text-align: right;">0.6565</td>
+<td style="text-align: right;">0.6550</td>
+<td style="text-align: right;">0.6544</td>
+<td style="text-align: right;">0.6278</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>hp_vs_tn</code></td>
+<td style="text-align: right;">0.7661</td>
+<td style="text-align: right;">0.7663</td>
+<td style="text-align: right;">0.5693</td>
+<td style="text-align: right;">0.7256</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>rp_vs_tn</code></td>
+<td style="text-align: right;">0.7842</td>
+<td style="text-align: right;">0.7879</td>
+<td style="text-align: right;">0.6792</td>
+<td style="text-align: right;">0.7428</td>
+</tr>
+</tbody>
+</table>
+<p>This is expected. Hard positives and hard negatives are both close to the cutoff, so even small score drift can reorder them. Tail negatives are much farther away from the selected region, so most variants keep enough signal to separate them.</p>
+<p>Among ablated variants, <code>pair_mid2</code> is the best variant for every task:</p>
+<table>
+<thead>
+<tr class="header">
+<th style="text-align: left;">task</th>
+<th style="text-align: left;">best ablated variant</th>
+<th style="text-align: right;">ROC AUC</th>
+<th style="text-align: right;">average precision</th>
+<th style="text-align: right;">F1 balanced rate</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;"><code>hp_vs_hn</code></td>
+<td style="text-align: left;"><code>pair_mid2</code></td>
+<td style="text-align: right;">0.7848</td>
+<td style="text-align: right;">0.7959</td>
+<td style="text-align: right;">0.7218</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>hp_vs_rn</code></td>
+<td style="text-align: left;"><code>pair_mid2</code></td>
+<td style="text-align: right;">0.8150</td>
+<td style="text-align: right;">0.8254</td>
+<td style="text-align: right;">0.7476</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>hp_vs_tn</code></td>
+<td style="text-align: left;"><code>pair_mid2</code></td>
+<td style="text-align: right;">0.9890</td>
+<td style="text-align: right;">0.9893</td>
+<td style="text-align: right;">0.9602</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>rp_vs_hn</code></td>
+<td style="text-align: left;"><code>pair_mid2</code></td>
+<td style="text-align: right;">0.8599</td>
+<td style="text-align: right;">0.8867</td>
+<td style="text-align: right;">0.7858</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>rp_vs_rn</code></td>
+<td style="text-align: left;"><code>pair_mid2</code></td>
+<td style="text-align: right;">0.8796</td>
+<td style="text-align: right;">0.9023</td>
+<td style="text-align: right;">0.8060</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>rp_vs_tn</code></td>
+<td style="text-align: left;"><code>pair_mid2</code></td>
+<td style="text-align: right;">0.9924</td>
+<td style="text-align: right;">0.9933</td>
+<td style="text-align: right;">0.9674</td>
+</tr>
+</tbody>
+</table>
+<h2 id="interpreting-calibration-failures">Interpreting Calibration Failures</h2>
+<p>Several variants have NaN or near-zero F1 at the original cutoff. This is not a missing-data problem. It means the original cutoff selected zero or almost zero examples after ablation, so precision and F1 are undefined or essentially zero.</p>
+<p>The pattern is informative:</p>
+<table>
+<colgroup>
+<col style="width: 33%" />
+<col style="width: 33%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th style="text-align: left;">family</th>
+<th style="text-align: right;">mean CoLoR shift</th>
+<th style="text-align: left;">interpretation</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;"><code>paired</code></td>
+<td style="text-align: right;">-0.2127</td>
+<td style="text-align: left;">relatively small drift; rankings degrade but calibration is partly preserved</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>marg_only</code></td>
+<td style="text-align: right;">-2.2663</td>
+<td style="text-align: left;">ablated CoLoR scores move downward because the prior side changes</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>cond_only</code></td>
+<td style="text-align: right;">2.2188</td>
+<td style="text-align: left;">ablated CoLoR scores move upward because the conditional side changes</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><code>cond_bot_marg_top</code></td>
+<td style="text-align: right;">3.5090</td>
+<td style="text-align: left;">strong upward shift; original cutoff often selects no positives</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><code>cond_top_marg_bot</code></td>
+<td style="text-align: right;">-4.0859</td>
+<td style="text-align: left;">strong downward shift; original cutoff can select too broadly despite poor ranking</td>
+</tr>
+</tbody>
+</table>
+<p>This explains why original-cutoff F1 and balanced-rate F1 sometimes disagree. Original-cutoff F1 is a joint test of ranking and calibration. Balanced-rate F1 mostly tests ranking after threshold recalibration. For a production filtering pipeline, both matter. For a scientific question about whether the ablated models still encode the same ordering, ROC AUC and balanced-rate F1 are more diagnostic.</p>
+<h2 id="discussion">Discussion</h2>
+<h3 id="middle-layer-paired-removal-is-surprisingly-robust.">1. Middle-layer paired removal is surprisingly robust.</h3>
+<p>The strongest ablated result is <code>pair_mid2</code>, removing layers <code>[5, 6]</code> from both auxiliary models. This variant retains strong separation even for boundary tasks. Its mean ROC AUC is <code>0.8868</code>, and its balanced-rate F1 is <code>0.8315</code>. It is not a drop-in replacement for the full model because the full model is perfect by construction on these labels, but it is strong evidence that the CoLoR ranking is not uniformly dependent on every layer.</p>
+<h3 id="matched-damage-is-safer-than-mismatched-damage.">2. Matched damage is safer than mismatched damage.</h3>
+<p>Paired ablations preserve the difference-score structure better than asymmetric ablations. This fits the mechanics of CoLoR. The score is a difference between two losses, so errors that affect both sides similarly can partially cancel. Errors that affect only one side, or affect opposite parts of the two models, can produce large shifts in the difference score.</p>
+<h3 id="the-conditional-side-is-more-fragile-than-the-marginal-side.">3. The conditional side is more fragile than the marginal side.</h3>
+<p>Marginal-only top removals perform much better than conditional-only top removals. <code>marg_top1_only</code> reaches mean ROC AUC <code>0.7730</code>, while <code>cond_top1_only</code> reaches <code>0.6752</code>, and larger conditional-only removals fall closer to chance. This suggests that the Books-conditional model’s top layers carry target-specific information that is important for the score.</p>
+<h3 id="the-hardest-examples-are-exactly-the-right-stress-test.">4. The hardest examples are exactly the right stress test.</h3>
+<p>The lowest average AUCs are on <code>hp_vs_hn</code> and <code>hp_vs_rn</code>. These are the tasks closest to the original cutoff, where score drift matters most. The model can often still separate positives from tail negatives, but that is not enough for data selection: the operational problem is deciding which examples near the cutoff should remain selected.</p>
+<h3 id="calibration-and-ranking-should-be-reported-separately.">5. Calibration and ranking should be reported separately.</h3>
+<p>The original cutoff is meaningful because it is the threshold the full model would use. But after ablation, some variants shift the score scale by multiple loss units. A threshold copied from the full model can fail even if the ordering is partly preserved. Reporting both original-cutoff F1 and balanced-rate F1 keeps this distinction visible.</p>
+<h2 id="limitations">Limitations</h2>
+<p>These results are best read as a controlled fallback-pool stress test.</p>
+<p>First, labels are derived from the full model, not human annotation. The task is therefore “recover the full-model heuristic” rather than “detect true Books quality.” This is appropriate for studying CoLoR-filter robustness, but it does not validate semantic data quality directly.</p>
+<p>Second, this is not the exact official selected-index pool. The run used a fallback source pool of 500,000 C4 sequences and sampled 5,000 examples per diagnostic pool. The exact official-pool recovery path should be run before using these numbers as final evidence about the released CoLoR indices.</p>
+<p>Third, the final evaluation pool is 25,000 examples, not the intended 5 x 100,000 official score-pool design. The smaller pool is enough to expose clear patterns across ablation families, but it cannot fully characterize rare failure modes in the tails.</p>
+<p>Fourth, runtime and memory efficiency are not the primary metrics in this report. The experiment evaluates score robustness after layer deletion. It does not by itself prove an end-to-end throughput win for a production filtering pipeline.</p>
+<h2 id="conclusion">Conclusion</h2>
+<p>The experiment supports a qualified version of the robustness hypothesis. The CoLoR score is not robust to arbitrary auxiliary-model ablation, but it is reasonably robust to matched, moderate ablations. The best variant, <code>pair_mid2</code>, preserves enough ranking signal to separate score-defined positive and negative pools with mean ROC AUC <code>0.8868</code>. Larger or asymmetric removals are much riskier, especially when top conditional layers are removed.</p>
+<p>For the next round, the most useful comparison is not “any ablation versus full” but “matched middle-layer ablations versus exact official-pool labels.” If <code>pair_mid2</code> remains strong on the exact official 500K recovery run, then it becomes a serious candidate for approximate CoLoR scoring. If it degrades substantially there, then the fallback-pool result should be treated as an optimistic diagnostic rather than a robust production finding.</p>
+<h2 id="reproducibility-appendix">Reproducibility Appendix</h2>
+<p>Run type:</p>
+<pre class="text"><code>fallback score-pool robustness</code></pre>
+<p>Source runbook:</p>
+<pre class="text"><code>docs/SCORE_POOL_ROBUSTNESS_COLAB_RUNBOOK.md</code></pre>
+<p>Relevant local outputs:</p>
+<pre class="text"><code>results/score-pool-robustness-fallback/fallback_pool_summary.json
+results/score-pool-robustness-fallback/metrics_pairwise.csv
+results/score-pool-robustness-fallback/score_shift_diagnostics.csv
+reports/score-pool-robustness-fallback/report.md
+reports/score-pool-robustness-fallback/report.html
+reports/score-pool-robustness-fallback/figures/*.png</code></pre>
+<p>Core settings:</p>
+<pre class="text"><code>source C4 sequences: 500,000
+diagnostic pool rows: 25,000
+sample size per pool: 5,000
+positive tau: 64
+negative tau: 32
+fallback positive cutoff: 0.3444314003
+fallback negative-band cutoff: 0.4070763588
+score convention: conditional_books_loss - prior_loss
+selection direction: lower CoLoR scores are better
+pairwise tasks: hp_vs_hn, hp_vs_rn, hp_vs_tn, rp_vs_hn, rp_vs_rn, rp_vs_tn</code></pre>
+<p>Validation checks performed after bringing outputs back locally:</p>
+<pre class="text"><code>metrics rows: 168
+variants: 28
+pairwise tasks: 6
+expected coverage: complete
+figures present: 6
+Markdown report present: yes
+HTML report present: yes</code></pre>
+<p>Known incomplete follow-up:</p>
+<pre class="text"><code>The exact official 500K selected-index recovery run has not been executed in
+this result bundle.</code></pre>
 </body>
 </html>
