@@ -39,7 +39,7 @@ Recommended Colab resources:
 ```text
 GPU:             A100 80GB
 System RAM:      >= 100GB
-local scratch:   >= 360GB free
+local scratch:   >= 25GB free for default streaming recovery
 Drive quota:     enough for recovered pool, scores, metrics, and plots
 ```
 
@@ -51,7 +51,12 @@ System RAM:           167GB
 Disk [local-scratch]: 368GB
 ```
 
-Do not put the `323.52 GiB` token cache under `/content` or Drive.
+Default recovery is streaming: it downloads one raw token shard at a time,
+recovers the needed rows into the final 500K token matrix, then deletes that
+shard before moving to the next one. This still transfers `323.52 GiB` over the
+network, but it does not need `323.52 GiB` of scratch space.
+
+Only the older non-streaming cache path needs about `340GiB` free scratch.
 
 ## 1. Runtime, Drive, and Token
 
@@ -86,12 +91,14 @@ Check storage:
 !df -h /content /content/local-scratch /content/drive/MyDrive
 ```
 
-Stop if `/content/local-scratch` has less than about `340GiB` free.
+For the default streaming recovery path, stop if `/content/local-scratch` has
+less than about `25GiB` free. If you intentionally use the old full-cache
+download path, stop unless scratch has at least about `340GiB` free.
 
 ## 2. Clone, Pin, and Install
 
-Push the commit containing this runbook and the pagination-aware recovery script,
-then set `PROJECT_SHA` to that exact pushed commit.
+Push the commit containing this runbook and the pagination-aware streaming
+recovery script, then set `PROJECT_SHA` to that exact pushed commit.
 
 ```python
 # PYTHON CELL
@@ -318,10 +325,22 @@ needed_file_count: 170
 total_needed_gib: 323.52
 ```
 
-## 7. Download Tokens and Recover Official Pool
+## 7. Stream Token Shards and Recover Official Pool
 
-This downloads about `323.52 GiB` to local scratch and writes the recovered
-500K-row pool to Drive.
+This streams about `323.52 GiB` from Hugging Face, but keeps only one raw shard
+on local scratch at a time. Each shard is downloaded, its needed rows are copied
+into the final recovered 500K-row token pool, and the shard is deleted before
+the next shard starts.
+
+The durable outputs are written to Drive:
+
+```text
+data/score_pool_tokens_official_500k.npy
+data/score_pool_meta_official_500k.parquet
+```
+
+This mode is slower than having all shards cached locally, but it avoids the
+`340GiB` scratch requirement.
 
 ```python
 # PYTHON CELL
@@ -336,6 +355,7 @@ os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 !python scripts/09_recover_score_pool_tokens.py \
   --config configs/score_pool_robustness.yaml \
   --download \
+  --streaming-download \
   --allow-large-download
 ```
 
@@ -356,15 +376,16 @@ if len(meta) != 500_000:
     raise RuntimeError(f"Unexpected metadata rows: {len(meta)}")
 ```
 
-After this verification, the local scratch token cache is no longer needed for
-scoring:
+After this verification, local scratch should contain only small cache metadata
+because streaming recovery deletes each raw shard after it has been processed:
 
 ```python
 # PYTHON CELL
 !du -sh "{SCRATCH}/token_cache" || true
 ```
 
-Delete it only after the recovered Drive pool is verified:
+You can delete the remaining cache metadata after the recovered Drive pool is
+verified:
 
 ```python
 # PYTHON CELL
@@ -614,9 +635,11 @@ Local scratch can be deleted after recovery:
 
 - If preflight reports fewer than `170` token files, the checkout is missing the
   pagination-aware `list_remote_files()` fix.
-- If scratch is below about `340GiB`, do not start token download.
-- If Colab disconnects after deleting scratch, recovery remains available from
-  Drive, but the raw token cache would need to be redownloaded only if recovery
-  must be rerun.
+- If streaming recovery is used and scratch is below about `25GiB`, do not start
+  token download.
+- If you use the older non-streaming recovery path, scratch needs about `340GiB`.
+- If Colab disconnects during streaming recovery, rerun the streaming command.
+  It will start over from the first shard because partial recovery is not yet
+  checkpointed. Once the recovered Drive pool verifies, scratch can be deleted.
 - If baseline metrics are poor, stop before the ablation grid and inspect
   checkpoint paths, recovered token shape, and score direction.

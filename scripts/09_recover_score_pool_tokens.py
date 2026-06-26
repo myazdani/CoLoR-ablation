@@ -423,6 +423,10 @@ def download_needed_files(
     return resolved
 
 
+def download_one_needed_file(*, repo_id: str, item: NeededFile, cache_dir: Path) -> Path:
+    return download_needed_files(repo_id=repo_id, needed=[item], cache_dir=cache_dir)[item.path]
+
+
 def download_needed_token_files(
     *,
     repo_id: str,
@@ -442,6 +446,26 @@ def download_needed_token_files(
         for path in needed_paths
     ]
     return download_needed_files(repo_id=repo_id, needed=needed, cache_dir=cache_dir)
+
+
+def remove_cached_file(path: Path, *, cache_dir: Path) -> None:
+    cache_dir = cache_dir.resolve()
+    resolved_path = path.resolve()
+    if resolved_path != cache_dir and cache_dir not in resolved_path.parents:
+        log(f"not deleting {path}; it is outside cache_dir={cache_dir}")
+        return
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return
+
+    parent = path.parent
+    while parent != cache_dir and cache_dir in parent.resolve().parents:
+        try:
+            parent.rmdir()
+        except OSError:
+            break
+        parent = parent.parent
 
 
 def recover_tokens(
@@ -475,6 +499,57 @@ def recover_tokens(
             tokens[output_pos] = np.asarray(mmap[start:end], dtype=np.int32)
         recovered[positions] = True
     tokens.flush()
+    if not recovered.all():
+        missing = int((~recovered).sum())
+        raise RuntimeError(f"Failed to recover {missing} sampled token rows")
+    output_meta.parent.mkdir(parents=True, exist_ok=True)
+    sample_meta.to_parquet(output_meta, index=False)
+
+
+def recover_tokens_streaming(
+    *,
+    sample_meta: pd.DataFrame,
+    needed: list[NeededFile],
+    repo_id: str,
+    cache_dir: Path,
+    output_tokens: Path,
+    output_meta: Path,
+    dtype: np.dtype,
+    sequence_length: int,
+    delete_shards_after_recovery: bool,
+) -> None:
+    tokens = np.lib.format.open_memmap(
+        output_tokens,
+        mode="w+",
+        dtype=np.int32,
+        shape=(len(sample_meta), sequence_length),
+    )
+    c4_indices = sample_meta["c4_index"].to_numpy(dtype=np.int64)
+    recovered = np.zeros(len(sample_meta), dtype=bool)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    for file_idx, item in enumerate(needed, start=1):
+        local_path = download_one_needed_file(repo_id=repo_id, item=item, cache_dir=cache_dir)
+        try:
+            values = local_path.stat().st_size // dtype.itemsize
+            mmap = np.memmap(local_path, dtype=dtype, mode="r", shape=(values,))
+            mask = (c4_indices >= item.chunk_start) & (c4_indices < item.chunk_end)
+            positions = np.flatnonzero(mask)
+            local_chunks = c4_indices[positions] - item.chunk_start
+            log(
+                f"recovering {len(positions):,} rows from {item.path} "
+                f"({file_idx:,}/{len(needed):,})"
+            )
+            for output_pos, local_chunk in zip(positions, local_chunks):
+                start = int(local_chunk) * sequence_length
+                end = start + sequence_length
+                tokens[output_pos] = np.asarray(mmap[start:end], dtype=np.int32)
+            recovered[positions] = True
+            tokens.flush()
+        finally:
+            if delete_shards_after_recovery:
+                remove_cached_file(local_path, cache_dir=cache_dir)
+
     if not recovered.all():
         missing = int((~recovered).sum())
         raise RuntimeError(f"Failed to recover {missing} sampled token rows")
@@ -557,6 +632,19 @@ def main() -> None:
         action="store_true",
         help="Re-scan CSV sidecars even if a cached location parquet exists.",
     )
+    parser.add_argument(
+        "--streaming-download",
+        action="store_true",
+        help=(
+            "Download one token shard at a time, recover its sampled rows, then delete it. "
+            "Only supported for index_source=contiguous_token_chunks."
+        ),
+    )
+    parser.add_argument(
+        "--keep-downloaded-shards",
+        action="store_true",
+        help="With --streaming-download, keep shard files after recovery instead of deleting them.",
+    )
     args = parser.parse_args()
 
     config = load_config(args.config)
@@ -611,6 +699,8 @@ def main() -> None:
         if not args.download:
             log("preflight only; rerun with --download to recover tokens")
             return
+        if args.streaming_download:
+            raise SystemExit("--streaming-download is only supported for contiguous_token_chunks recovery.")
         if not plan["index_coverage_ok"]:
             missing = plan["unique_c4_indices"] - plan["found_unique_c4_indices"]
             raise SystemExit(f"Exact recovery cannot proceed: missing {missing:,} c4 ids from CSV sidecars.")
@@ -694,16 +784,30 @@ def main() -> None:
 
     cache_dir = Path(token_cfg["local_cache_dir"])
     cache_dir.mkdir(parents=True, exist_ok=True)
-    local_paths = download_needed_files(repo_id=repo_id, needed=needed, cache_dir=cache_dir)
-    recover_tokens(
-        sample_meta=sample_meta,
-        needed=needed,
-        local_paths=local_paths,
-        output_tokens=Path(token_cfg["recovered_tokens"]),
-        output_meta=Path(token_cfg["recovered_meta"]),
-        dtype=dtype,
-        sequence_length=sequence_length,
-    )
+    if args.streaming_download:
+        log("streaming mode: downloading and recovering one token shard at a time")
+        recover_tokens_streaming(
+            sample_meta=sample_meta,
+            needed=needed,
+            repo_id=repo_id,
+            cache_dir=cache_dir,
+            output_tokens=Path(token_cfg["recovered_tokens"]),
+            output_meta=Path(token_cfg["recovered_meta"]),
+            dtype=dtype,
+            sequence_length=sequence_length,
+            delete_shards_after_recovery=not args.keep_downloaded_shards,
+        )
+    else:
+        local_paths = download_needed_files(repo_id=repo_id, needed=needed, cache_dir=cache_dir)
+        recover_tokens(
+            sample_meta=sample_meta,
+            needed=needed,
+            local_paths=local_paths,
+            output_tokens=Path(token_cfg["recovered_tokens"]),
+            output_meta=Path(token_cfg["recovered_meta"]),
+            dtype=dtype,
+            sequence_length=sequence_length,
+        )
     log(f"wrote tokens: {token_cfg['recovered_tokens']}")
     log(f"wrote metadata: {token_cfg['recovered_meta']}")
 

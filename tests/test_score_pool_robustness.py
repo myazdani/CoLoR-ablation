@@ -192,6 +192,90 @@ def test_token_recovery_plan_helpers(tmp_path) -> None:
     assert [item.needed_rows for item in needed] == [2, 2]
 
 
+def test_streaming_token_recovery_downloads_and_deletes_one_shard_at_a_time(tmp_path, monkeypatch) -> None:
+    script_path = __import__("pathlib").Path(__file__).resolve().parents[1] / "scripts" / "09_recover_score_pool_tokens.py"
+    spec = importlib.util.spec_from_file_location("recover_script_streaming", script_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["recover_script_streaming"] = module
+    spec.loader.exec_module(module)
+
+    cache_dir = tmp_path / "cache"
+    shard_a = cache_dir / "full_data/c4/a.npy"
+    shard_b = cache_dir / "full_data/c4/b.npy"
+    shard_a.parent.mkdir(parents=True)
+    np.arange(16, dtype=np.uint16).tofile(shard_a)
+    (np.arange(16, dtype=np.uint16) + 100).tofile(shard_b)
+
+    sample_meta = pd.DataFrame(
+        {
+            "seq_idx": [0, 1, 2, 3],
+            "pool_name": ["a", "a", "b", "b"],
+            "c4_index": [0, 3, 4, 7],
+        }
+    )
+    needed = [
+        module.NeededFile(
+            path="full_data/c4/a.npy",
+            size=shard_a.stat().st_size,
+            chunk_start=0,
+            chunk_end=4,
+            needed_rows=2,
+        ),
+        module.NeededFile(
+            path="full_data/c4/b.npy",
+            size=shard_b.stat().st_size,
+            chunk_start=4,
+            chunk_end=8,
+            needed_rows=2,
+        ),
+    ]
+
+    download_order = []
+
+    def fake_download_one_needed_file(*, repo_id, item, cache_dir):
+        download_order.append(item.path)
+        return cache_dir / item.path
+
+    monkeypatch.setattr(module, "download_one_needed_file", fake_download_one_needed_file)
+
+    captured_meta = {}
+
+    def fake_to_parquet(self, path, index=False):
+        captured_meta["frame"] = self.copy()
+        captured_meta["path"] = path
+        captured_meta["index"] = index
+
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", fake_to_parquet)
+
+    output_tokens = tmp_path / "recovered.npy"
+    output_meta = tmp_path / "recovered.parquet"
+    module.recover_tokens_streaming(
+        sample_meta=sample_meta,
+        needed=needed,
+        repo_id="owner/repo",
+        cache_dir=cache_dir,
+        output_tokens=output_tokens,
+        output_meta=output_meta,
+        dtype=np.dtype(np.uint16),
+        sequence_length=4,
+        delete_shards_after_recovery=True,
+    )
+
+    recovered = np.load(output_tokens)
+    assert recovered.tolist() == [
+        [0, 1, 2, 3],
+        [12, 13, 14, 15],
+        [100, 101, 102, 103],
+        [112, 113, 114, 115],
+    ]
+    assert download_order == ["full_data/c4/a.npy", "full_data/c4/b.npy"]
+    assert not shard_a.exists()
+    assert not shard_b.exists()
+    assert captured_meta["path"] == output_meta
+    assert captured_meta["frame"].equals(sample_meta)
+
+
 def test_list_remote_files_follows_hf_pagination(monkeypatch) -> None:
     script_path = __import__("pathlib").Path(__file__).resolve().parents[1] / "scripts" / "09_recover_score_pool_tokens.py"
     spec = importlib.util.spec_from_file_location("recover_script_pagination", script_path)
