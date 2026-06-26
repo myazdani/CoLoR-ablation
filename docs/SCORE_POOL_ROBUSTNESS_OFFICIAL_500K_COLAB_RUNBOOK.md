@@ -402,42 +402,85 @@ metrics = pd.read_csv(f"{DRIVE}/results/score-pool-robustness-official-500k/metr
 display(metrics[["variant", "pairwise_task", "roc_auc", "average_precision", "f1_at_original_cutoff", "f1_at_balanced_rate"]])
 ```
 
-Inspect this before launching the ablation grid.
+Inspect this before launching the reduced ablation set.
 
-## 9. Pilot Ablations
+## 9. Reduced Official Ablation Set
 
-Run a small pilot first:
+The fallback-pool run showed enough structure that the official 500K run should
+not start with the full 26-ablation grid. On the official pool, each variant
+scores `500,000` sequences with both the conditional and marginal models, so the
+full grid costs many A100-hours. The reduced set below keeps the highest-signal
+comparisons from the fallback report:
+
+```text
+pair_mid2:
+  best fallback ablation overall; primary candidate.
+
+pair_top1, pair_top2:
+  strong paired top-layer baselines with small/moderate deletion.
+
+pair_mid4:
+  tests whether the middle-layer result survives a larger middle deletion.
+
+marg_top1_only, marg_top2_only:
+  marginal-only removals were surprisingly competitive in the fallback run.
+
+cond_top1_only:
+  tests whether Books-conditional top layers are especially fragile.
+
+cond_top2_marg_bot2, cond_bot2_marg_top2:
+  asymmetric directionality checks at moderate deletion size.
+
+cond_top6_marg_bot6:
+  severe negative-control case that was below chance in the fallback run.
+```
+
+Together with `full` and `full_rescore` from Step 8, this gives 12 total
+variants instead of 28 total variants. This is the default official run. On an
+A100, expect the 10 ablation variants in this step to take roughly `5-7` hours,
+depending on Drive I/O and skip/resume state.
 
 ```python
 # PYTHON CELL
-pilot_variants = [
+selected_variants = [
+    "pair_mid2",
+    "pair_top1",
     "pair_top2",
+    "pair_mid4",
+    "marg_top1_only",
+    "marg_top2_only",
+    "cond_top1_only",
     "cond_top2_marg_bot2",
     "cond_bot2_marg_top2",
-    "cond_top2_only",
-    "marg_top2_only",
+    "cond_top6_marg_bot6",
 ]
-for variant in pilot_variants:
+for variant in selected_variants:
     print(f"=== {variant} ===")
     !PYTHONPATH="{OLMO}" python scripts/10_score_pool_variant.py --config configs/score_pool_robustness.yaml --variant {variant}
 ```
 
-Recompute metrics:
+Recompute metrics and inspect the reduced official result:
 
 ```python
 # PYTHON CELL
 !python scripts/11_score_pool_metrics.py --config configs/score_pool_robustness.yaml
-pilot = pd.read_csv(f"{DRIVE}/results/score-pool-robustness-official-500k/metrics_pairwise.csv")
-display(pilot[pilot["variant"].isin(["full", "full_rescore"] + pilot_variants)])
+selected = pd.read_csv(f"{DRIVE}/results/score-pool-robustness-official-500k/metrics_pairwise.csv")
+display(selected[selected["variant"].isin(["full", "full_rescore"] + selected_variants)])
 ```
 
-## 10. Full Ablation Grid
+## 10. Optional Expanded Ablation Grid
 
-Run the full grid only after the pilot looks sane:
+Skip this section for the default official run. Run it only if the reduced set
+does not answer the research question or if you need an exhaustive appendix.
+
+The expanded grid adds weaker or more redundant variants that were less useful
+in the fallback report: larger bottom deletions, larger conditional-only
+deletions, and larger asymmetric variants. If Step 9 has already completed, the
+scoring script will skip any already-completed variants when rerun.
 
 ```python
 # PYTHON CELL
-variants = [
+expanded_variants = [
     "pair_top1", "pair_top2", "pair_top4", "pair_top6",
     "pair_mid2", "pair_mid4",
     "pair_bot1", "pair_bot2", "pair_bot4", "pair_bot6",
@@ -446,7 +489,7 @@ variants = [
     "cond_top1_only", "cond_top2_only", "cond_top4_only", "cond_top6_only",
     "marg_top1_only", "marg_top2_only", "marg_top4_only", "marg_top6_only",
 ]
-for variant in variants:
+for variant in expanded_variants:
     print(f"=== {variant} ===")
     !PYTHONPATH="{OLMO}" python scripts/10_score_pool_variant.py --config configs/score_pool_robustness.yaml --variant {variant}
 ```
