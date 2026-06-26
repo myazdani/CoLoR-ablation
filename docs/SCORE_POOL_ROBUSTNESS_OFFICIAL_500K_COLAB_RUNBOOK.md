@@ -435,6 +435,42 @@ budget is roughly `N * 1.1` to `N * 1.3`.
   --allow-large-download
 ```
 
+The streaming command writes a checkpoint next to the recovered token file after
+each completed shard:
+
+```text
+data/score_pool_tokens_official_500k.npy.streaming_checkpoint.json
+```
+
+If the runtime disconnects after using a commit with checkpoint support, reconnect
+and resume with:
+
+```python
+# PYTHON CELL
+!python scripts/09_recover_score_pool_tokens.py \
+  --config configs/score_pool_robustness.yaml \
+  --download \
+  --streaming-download \
+  --resume-streaming \
+  --allow-large-download
+```
+
+If the disconnect happened before checkpoint support was available, use the last
+completed shard number in the log. For example, if the log shows
+`recovering ... (47/170)` and then disconnects while downloading `(48/170)`,
+the already-flushed token file can be resumed from shard 48:
+
+```python
+# PYTHON CELL
+!python scripts/09_recover_score_pool_tokens.py \
+  --config configs/score_pool_robustness.yaml \
+  --download \
+  --streaming-download \
+  --resume-streaming \
+  --streaming-resume-from-file-index 48 \
+  --allow-large-download
+```
+
 Verify recovered pool:
 
 ```python

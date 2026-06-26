@@ -8,6 +8,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.parse
 import urllib.request
 from dataclasses import asdict, dataclass
@@ -506,6 +507,65 @@ def recover_tokens(
     sample_meta.to_parquet(output_meta, index=False)
 
 
+def default_streaming_checkpoint_path(output_tokens: Path) -> Path:
+    return Path(f"{output_tokens}.streaming_checkpoint.json")
+
+
+def read_streaming_checkpoint(path: Path) -> set[str]:
+    if not path.exists():
+        return set()
+    data = json.loads(path.read_text())
+    return set(str(value) for value in data.get("completed_paths", []))
+
+
+def write_streaming_checkpoint(
+    *,
+    path: Path,
+    completed_paths: set[str],
+    completed_count: int,
+    total_count: int,
+) -> None:
+    checkpoint = {
+        "completed_paths": sorted(completed_paths),
+        "completed_count": completed_count,
+        "total_count": total_count,
+        "updated_unix_seconds": time.time(),
+    }
+    ensure_parent(path).write_text(json.dumps(checkpoint, indent=2) + "\n")
+
+
+def open_streaming_output_tokens(
+    *,
+    output_tokens: Path,
+    rows: int,
+    sequence_length: int,
+    resume: bool,
+) -> np.memmap:
+    if resume:
+        if not output_tokens.exists():
+            raise RuntimeError(f"Cannot resume streaming recovery: missing {output_tokens}")
+        tokens = np.load(output_tokens, mmap_mode="r+")
+        expected_shape = (rows, sequence_length)
+        if tokens.shape != expected_shape:
+            raise RuntimeError(
+                f"Cannot resume streaming recovery: expected token shape {expected_shape}, "
+                f"found {tokens.shape}"
+            )
+        if tokens.dtype != np.int32:
+            raise RuntimeError(
+                f"Cannot resume streaming recovery: expected token dtype int32, found {tokens.dtype}"
+            )
+        return tokens
+
+    output_tokens.parent.mkdir(parents=True, exist_ok=True)
+    return np.lib.format.open_memmap(
+        output_tokens,
+        mode="w+",
+        dtype=np.int32,
+        shape=(rows, sequence_length),
+    )
+
+
 def recover_tokens_streaming(
     *,
     sample_meta: pd.DataFrame,
@@ -517,24 +577,41 @@ def recover_tokens_streaming(
     dtype: np.dtype,
     sequence_length: int,
     delete_shards_after_recovery: bool,
+    resume: bool = False,
+    resume_from_file_index: int | None = None,
+    checkpoint_path: Path | None = None,
 ) -> None:
-    tokens = np.lib.format.open_memmap(
-        output_tokens,
-        mode="w+",
-        dtype=np.int32,
-        shape=(len(sample_meta), sequence_length),
+    if resume_from_file_index is not None and resume_from_file_index < 1:
+        raise ValueError("--streaming-resume-from-file-index must be 1-indexed and >= 1")
+    checkpoint_path = checkpoint_path or default_streaming_checkpoint_path(output_tokens)
+    if not resume and checkpoint_path.exists():
+        checkpoint_path.unlink()
+    completed_paths = read_streaming_checkpoint(checkpoint_path) if resume else set()
+    if resume and resume_from_file_index is not None:
+        completed_paths.update(item.path for item in needed[: resume_from_file_index - 1])
+
+    tokens = open_streaming_output_tokens(
+        output_tokens=output_tokens,
+        rows=len(sample_meta),
+        sequence_length=sequence_length,
+        resume=resume,
     )
     c4_indices = sample_meta["c4_index"].to_numpy(dtype=np.int64)
     recovered = np.zeros(len(sample_meta), dtype=bool)
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     for file_idx, item in enumerate(needed, start=1):
+        mask = (c4_indices >= item.chunk_start) & (c4_indices < item.chunk_end)
+        positions = np.flatnonzero(mask)
+        if item.path in completed_paths:
+            log(f"skipping completed shard {item.path} ({file_idx:,}/{len(needed):,})")
+            recovered[positions] = True
+            continue
+
         local_path = download_one_needed_file(repo_id=repo_id, item=item, cache_dir=cache_dir)
         try:
             values = local_path.stat().st_size // dtype.itemsize
             mmap = np.memmap(local_path, dtype=dtype, mode="r", shape=(values,))
-            mask = (c4_indices >= item.chunk_start) & (c4_indices < item.chunk_end)
-            positions = np.flatnonzero(mask)
             local_chunks = c4_indices[positions] - item.chunk_start
             log(
                 f"recovering {len(positions):,} rows from {item.path} "
@@ -546,6 +623,13 @@ def recover_tokens_streaming(
                 tokens[output_pos] = np.asarray(mmap[start:end], dtype=np.int32)
             recovered[positions] = True
             tokens.flush()
+            completed_paths.add(item.path)
+            write_streaming_checkpoint(
+                path=checkpoint_path,
+                completed_paths=completed_paths,
+                completed_count=len(completed_paths),
+                total_count=len(needed),
+            )
         finally:
             if delete_shards_after_recovery:
                 remove_cached_file(local_path, cache_dir=cache_dir)
@@ -644,6 +728,25 @@ def main() -> None:
         "--keep-downloaded-shards",
         action="store_true",
         help="With --streaming-download, keep shard files after recovery instead of deleting them.",
+    )
+    parser.add_argument(
+        "--resume-streaming",
+        action="store_true",
+        help="Resume streaming recovery into an existing recovered_tokens .npy file.",
+    )
+    parser.add_argument(
+        "--streaming-resume-from-file-index",
+        type=int,
+        default=None,
+        help=(
+            "1-indexed needed-file position to resume from when no checkpoint exists. "
+            "For example, use 48 if shards 1 through 47 were completed."
+        ),
+    )
+    parser.add_argument(
+        "--streaming-checkpoint",
+        default=None,
+        help="Optional checkpoint JSON path for streaming recovery.",
     )
     args = parser.parse_args()
 
@@ -796,6 +899,9 @@ def main() -> None:
             dtype=dtype,
             sequence_length=sequence_length,
             delete_shards_after_recovery=not args.keep_downloaded_shards,
+            resume=args.resume_streaming,
+            resume_from_file_index=args.streaming_resume_from_file_index,
+            checkpoint_path=Path(args.streaming_checkpoint) if args.streaming_checkpoint else None,
         )
     else:
         local_paths = download_needed_files(repo_id=repo_id, needed=needed, cache_dir=cache_dir)
