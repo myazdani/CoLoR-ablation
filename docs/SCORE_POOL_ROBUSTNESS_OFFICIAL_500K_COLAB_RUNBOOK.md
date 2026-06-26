@@ -458,7 +458,24 @@ and resume with:
 If the disconnect happened before checkpoint support was available, use the last
 completed shard number in the log. For example, if the log shows
 `recovering ... (47/170)` and then disconnects while downloading `(48/170)`,
-the already-flushed token file can be resumed from shard 48:
+first confirm that the already-flushed token file exists:
+
+```python
+# PYTHON CELL
+from pathlib import Path
+
+partial_tokens = Path(f"{DRIVE}/data/score_pool_tokens_official_500k.npy")
+print("partial token file exists:", partial_tokens.exists())
+if partial_tokens.exists():
+    print("partial token file bytes:", partial_tokens.stat().st_size)
+else:
+    raise RuntimeError(
+        "No partial recovered token file found. Do not use "
+        "--streaming-resume-from-file-index; rerun Step 7 from the start."
+    )
+```
+
+If this check passes, resume from shard 48:
 
 ```python
 # PYTHON CELL
