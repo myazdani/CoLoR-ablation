@@ -296,16 +296,46 @@ to recompute existing shards.
   --config configs/sequence_length_score_pool.yaml
 ```
 
+The metrics CSVs are written to Drive through the config output directory. The
+report script writes `report.md` and `report.html` to the repo-relative
+`reports/` directory, which is transient on Colab. Copy the report directory to
+Drive immediately:
+
+```python
+from pathlib import Path
+import shutil
+
+PROJECT_REPORT = Path("reports/sequence-length-score-pool")
+DRIVE_REPORT = Path(f"{DRIVE}/reports/sequence-length-score-pool")
+
+if not PROJECT_REPORT.exists():
+    raise RuntimeError(f"Missing local report directory: {PROJECT_REPORT}")
+
+DRIVE_REPORT.parent.mkdir(parents=True, exist_ok=True)
+if DRIVE_REPORT.exists():
+    shutil.rmtree(DRIVE_REPORT)
+shutil.copytree(PROJECT_REPORT, DRIVE_REPORT)
+
+expected = [
+    DRIVE_REPORT / "report.md",
+    DRIVE_REPORT / "report.html",
+]
+for path in expected:
+    print(path, path.exists(), path.stat().st_size if path.exists() else None)
+    assert path.exists()
+print("figures:", sorted(p.name for p in (DRIVE_REPORT / "figures").glob("*")) if (DRIVE_REPORT / "figures").exists() else [])
+```
+
 Bring back:
 
 ```text
-results/sequence-length-score-pool/scores_*.parquet
-results/sequence-length-score-pool/metrics_pairwise_sequence_length.csv
-results/sequence-length-score-pool/score_shift_diagnostics_sequence_length.csv
-results/sequence-length-score-pool/runtime_by_window.csv
-reports/sequence-length-score-pool/report.md
-reports/sequence-length-score-pool/report.html
-reports/sequence-length-score-pool/figures/*.png
+MyDrive/color-filter-ablation/results/sequence-length-score-pool/scores_*.parquet
+MyDrive/color-filter-ablation/results/sequence-length-score-pool/metrics_pairwise_sequence_length.csv
+MyDrive/color-filter-ablation/results/sequence-length-score-pool/score_shift_diagnostics_sequence_length.csv
+MyDrive/color-filter-ablation/results/sequence-length-score-pool/runtime_by_window.csv
+MyDrive/color-filter-ablation/reports/sequence-length-score-pool/report.md
+MyDrive/color-filter-ablation/reports/sequence-length-score-pool/report.html
+MyDrive/color-filter-ablation/reports/sequence-length-score-pool/figures/*.png
 ```
 
 ## 9. Expected Runtime
