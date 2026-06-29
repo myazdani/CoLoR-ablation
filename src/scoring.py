@@ -17,6 +17,49 @@ class ScoreStats:
     tokens_per_second: float
 
 
+def extract_token_window(
+    pool: np.ndarray,
+    *,
+    indices: tuple[int, int] | None = None,
+    spans: tuple[tuple[int, int], ...] | None = None,
+    stride: int | None = None,
+) -> np.ndarray:
+    if pool.ndim != 2:
+        raise ValueError(f"Expected token pool shape [rows, seq], got {pool.shape}")
+    if indices is not None and spans is not None:
+        raise ValueError("Use either indices or spans, not both")
+    if stride is not None and (indices is not None or spans is not None):
+        raise ValueError("Use either stride or explicit window spans, not both")
+    if stride is not None:
+        if stride < 1:
+            raise ValueError("stride must be >= 1")
+        return pool[:, ::stride]
+    if indices is not None:
+        start, end = indices
+        _validate_span(start, end, pool.shape[1])
+        return pool[:, start:end]
+    if spans is None:
+        return pool
+    parts = []
+    for start, end in spans:
+        _validate_span(start, end, pool.shape[1])
+        parts.append(pool[:, start:end])
+    if not parts:
+        raise ValueError("spans must contain at least one span")
+    return np.concatenate(parts, axis=1)
+
+
+def _validate_span(start: int, end: int, sequence_length: int) -> None:
+    if start < 0 or end < 0:
+        raise ValueError(f"Token span must be non-negative, got ({start}, {end})")
+    if start >= end:
+        raise ValueError(f"Token span start must be < end, got ({start}, {end})")
+    if end > sequence_length:
+        raise ValueError(
+            f"Token span ({start}, {end}) exceeds sequence length {sequence_length}"
+        )
+
+
 def resolve_device(device: str) -> torch.device:
     if device == "auto":
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")

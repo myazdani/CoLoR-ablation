@@ -20,6 +20,7 @@ from src.score_pool_robustness import (
     load_pool_samples,
     roc_auc_from_scores,
 )
+from src.scoring import extract_token_window
 
 
 class TinyBlock(nn.Module):
@@ -464,3 +465,117 @@ def test_doc_location_recovery_pads_and_truncates(tmp_path, monkeypatch) -> None
     assert recovered.tolist() == [[2, 3, 4, 1, 1], [4, 5, 6, 7, 8]]
     assert meta["was_padded"].tolist() == [True, False]
     assert meta["was_truncated"].tolist() == [False, True]
+
+
+def test_pair_mid2_cascade_recovers_reference_with_expanded_candidates() -> None:
+    script_path = __import__("pathlib").Path(__file__).resolve().parents[1] / "scripts" / "15_pair_mid2_cascade_analysis.py"
+    spec = importlib.util.spec_from_file_location("cascade_script", script_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["cascade_script"] = module
+    spec.loader.exec_module(module)
+
+    scores = pd.DataFrame(
+        {
+            "seq_idx": np.arange(8),
+            "pool_name": ["hard_positive"] * 4 + ["hard_negative"] * 4,
+            "full_color_score_local": [0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80],
+            "pair_mid2_color_score": [0.10, 0.20, 0.30, 0.45, 0.35, 0.60, 0.70, 0.80],
+        }
+    )
+    full_runtime = module.RuntimeStats("full", elapsed_seconds=100.0, tokens_scored=8, tokens_per_second=1.0, rows=8)
+    pair_mid2_runtime = module.RuntimeStats("pair_mid2", elapsed_seconds=50.0, tokens_scored=8, tokens_per_second=1.0, rows=8)
+
+    metrics = module.compute_pairwise_cascade_metrics(
+        scores,
+        multipliers=(1.0, 1.25),
+        pairwise_tasks=("hp_vs_hn",),
+        full_runtime=full_runtime,
+        pair_mid2_runtime=pair_mid2_runtime,
+    ).set_index("multiplier")
+
+    assert metrics.loc[1.0, "candidate_recall_vs_full"] == 0.75
+    assert metrics.loc[1.0, "final_recall_vs_full"] == 0.75
+    assert metrics.loc[1.25, "candidate_count"] == 5
+    assert metrics.loc[1.25, "candidate_recall_vs_full"] == 1.0
+    assert metrics.loc[1.25, "final_recall_vs_full"] == 1.0
+
+
+def test_sequence_window_extraction_variants() -> None:
+    pool = np.arange(2 * 8, dtype=np.int32).reshape(2, 8)
+
+    assert extract_token_window(pool, indices=(0, 4)).tolist() == [
+        [0, 1, 2, 3],
+        [8, 9, 10, 11],
+    ]
+    assert extract_token_window(pool, indices=(4, 8)).tolist() == [
+        [4, 5, 6, 7],
+        [12, 13, 14, 15],
+    ]
+    assert extract_token_window(pool, indices=(2, 6)).tolist() == [
+        [2, 3, 4, 5],
+        [10, 11, 12, 13],
+    ]
+    assert extract_token_window(pool, spans=((0, 2), (6, 8))).tolist() == [
+        [0, 1, 6, 7],
+        [8, 9, 14, 15],
+    ]
+    assert extract_token_window(pool, stride=2).tolist() == [
+        [0, 2, 4, 6],
+        [8, 10, 12, 14],
+    ]
+
+
+def test_sequence_window_annotation_preserves_metric_columns() -> None:
+    script_path = __import__("pathlib").Path(__file__).resolve().parents[1] / "scripts" / "16_score_sequence_window.py"
+    spec = importlib.util.spec_from_file_location("sequence_window_script", script_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["sequence_window_script"] = module
+    spec.loader.exec_module(module)
+
+    scores = pd.DataFrame(
+        {
+            "seq_idx": [0, 1],
+            "nll_cond": [3.0, 4.0],
+            "nll_marg": [2.5, 4.5],
+            "color": [0.5, -0.5],
+        }
+    )
+    meta = pd.DataFrame(
+        {
+            "seq_idx": [10, 11],
+            "pool_name": ["hard_positive", "hard_negative"],
+            "full_prior_score": [2.0, 2.1],
+            "full_conditional_books_score": [2.5, 2.4],
+            "full_color_score": [0.5, 0.3],
+        }
+    )
+    annotated = module.annotate_scores(
+        scores,
+        meta,
+        window_spec={"id": "seq_prefix_256", "label": "Prefix 256", "indices": [0, 256]},
+        effective_length=256,
+        git_sha="abc",
+        config_sha="def",
+        token_pool_sha="ghi",
+        cond_checkpoint="cond",
+        marg_checkpoint="marg",
+        cond_checkpoint_sha="condsha",
+        marg_checkpoint_sha="margsha",
+        torch_version="test",
+        cuda_version="",
+        cuda_device_name="",
+        batch_size=128,
+        dtype="bf16",
+        device="cuda",
+        stats={"elapsed_seconds": 1.0, "tokens_scored": 1024, "tokens_per_second": 1024.0},
+        shard_start=10,
+        shard_end=12,
+    )
+
+    assert annotated["seq_idx"].tolist() == [10, 11]
+    assert annotated["sequence_window_id"].tolist() == ["seq_prefix_256", "seq_prefix_256"]
+    assert annotated["effective_sequence_length"].tolist() == [256, 256]
+    assert annotated["ablated_color_score"].tolist() == [0.5, -0.5]
+    assert annotated["batch_size"].tolist() == [128, 128]

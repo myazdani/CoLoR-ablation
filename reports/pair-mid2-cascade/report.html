@@ -1,0 +1,574 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Pair-Mid2 Cascade With Full-Model Reranking</title>
+<style>
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 980px; margin: 40px auto; line-height: 1.55; color: #1f2933; padding: 0 20px; }
+pre { background: #f6f8fa; padding: 12px; overflow-x: auto; }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+table { border-collapse: collapse; width: 100%; margin: 18px 0; font-size: 0.92em; }
+th, td { border: 1px solid #d7dde5; padding: 7px 9px; text-align: left; vertical-align: top; }
+th { background: #eef2f7; }
+img { max-width: 100%; border: 1px solid #ddd; }
+figure { margin: 24px 0; }
+figcaption { color: #555; font-size: 0.9em; }
+p { margin: 0.6em 0; }
+</style>
+</head>
+<body>
+<h1>Pair-Mid2 Cascade With Full-Model Reranking</h1>
+
+<h2>Abstract</h2>
+
+<p>This report evaluates whether the `pair_mid2` layer-deletion scorer can reduce full-model CoLoR scoring cost through a two-stage cascade. The cascade ranks all rows with `pair_mid2`, keeps an expanded candidate set, and then uses full Books CoLoR scores only as a reranker inside that candidate set. The analysis is offline because the official 500K pool has already been scored by both the full model and `pair_mid2`; this lets us estimate recall, Jaccard overlap, and runtime tradeoffs without launching another GPU job.</p>
+
+<p>Pair-mid2 is not useful as a standalone replacement, but it is useful as a cascade prefilter for small full-pool selection rates in the tested regime. The strongest passing setting is selection rate 1/64 at m=1.5, with 0.9736 recall and 1.1086x estimated speedup. The main failure case is the hard-positive vs hard-negative comparison, where unsaturated pair_mid2 candidate recall is weak.</p>
+
+<h2>Background and Motivation</h2>
+
+<p>The prior official 500K robustness run showed that many layer-deleted variants preserve some CoLoR ranking signal but do not exactly reproduce the full-model selection. `pair_mid2`, which deletes the middle two layers from both marginal and conditional models, was one of the strongest layer-deletion approximations. That makes it a natural candidate for a cascade: use the cheap scorer to avoid running the full scorer everywhere, then let the full scorer make the final boundary decision on a smaller candidate set.</p>
+
+<p>The central question is not whether `pair_mid2` can replace the full scorer. The useful question is whether it has enough recall at the top of the ranking to act as a prefilter. A prefilter can tolerate many false positives if the candidate set is still much smaller than the full pool and contains most of the full-model positives.</p>
+
+<h2>Methods</h2>
+
+<p>For each pairwise pool task, positives and negatives are the same as in the score-pool robustness analysis. Each task has 100K positive rows and 100K negative rows. For a candidate multiplier `m`, we keep the lowest `m * k` rows by `pair_mid2` CoLoR score, where `k` is the number of positives, then rerank those candidates by the full-model CoLoR score and select the lowest `k` rows.</p>
+
+<p>For the full-pool analysis, the reference set is the lowest `k` rows by the local full-model score over all 500K rows. Selection rates are `1/64`, `1/32`, `1/16`, and `1/8`. The candidate set is again selected by `pair_mid2`, and the final simulated selection is selected by full-model score inside the candidate set.</p>
+
+<p>Runtime estimates use the measured official 500K elapsed times saved in the score parquet files. The end-to-end cascade estimate includes both the first-stage `pair_mid2` pass over all rows and the full-model rerank pass over the retained candidate fraction.</p>
+
+<h2>Experimental Setup</h2>
+
+<ul>
+<li>Dataset: official 500K score-pool sample with five 100K pools.</li>
+<li>Score sign: lower CoLoR score is better, matching the paper-sign convention.</li>
+<li>Reference full scorer: `scores_full.parquet`.</li>
+<li>Cheap prefilter scorer: `scores_pair_mid2.parquet`.</li>
+<li>Candidate multipliers: `1`, `1.25`, `1.5`, `2`, `3`, `4`, `8`.</li>
+<li>Full-pool selection rates: `1/64`, `1/32`, `1/16`, `1/8`.</li>
+</ul>
+
+<h2>Measured Runtime Inputs</h2>
+
+<table>
+<thead><tr>
+<th>label</th>
+<th>rows</th>
+<th>elapsed_seconds</th>
+<th>tokens_per_second</th>
+<th>relative_to_full</th>
+</tr></thead>
+<tbody>
+<tr>
+<td>full</td>
+<td>500000</td>
+<td>2325.4609</td>
+<td>220171.4106</td>
+<td>1.0000</td>
+</tr>
+<tr>
+<td>pair_mid2</td>
+<td>500000</td>
+<td>2043.1094</td>
+<td>250598.4307</td>
+<td>0.8786</td>
+</tr>
+</tbody></table>
+
+<h2>Full-Pool Cascade Results</h2>
+
+<p>The table below reports final overlap with the local full-model selected set after full reranking of the `pair_mid2` candidate set. End-to-end speedup includes the cost of scoring all rows with `pair_mid2`.</p>
+
+<table>
+<thead><tr>
+<th>selection_rate_label</th>
+<th>multiplier</th>
+<th>candidate_fraction</th>
+<th>final_recall_vs_full</th>
+<th>final_jaccard_vs_full</th>
+<th>estimated_end_to_end_speedup_vs_full</th>
+</tr></thead>
+<tbody>
+<tr>
+<td>1/64</td>
+<td>1.0000</td>
+<td>0.0156</td>
+<td>0.8312</td>
+<td>0.7111</td>
+<td>1.1183</td>
+</tr>
+<tr>
+<td>1/64</td>
+<td>1.2500</td>
+<td>0.0195</td>
+<td>0.9278</td>
+<td>0.8653</td>
+<td>1.1134</td>
+</tr>
+<tr>
+<td>1/64</td>
+<td>1.5000</td>
+<td>0.0234</td>
+<td>0.9736</td>
+<td>0.9486</td>
+<td>1.1086</td>
+</tr>
+<tr>
+<td>1/64</td>
+<td>2.0000</td>
+<td>0.0313</td>
+<td>0.9956</td>
+<td>0.9913</td>
+<td>1.0991</td>
+</tr>
+<tr>
+<td>1/64</td>
+<td>3.0000</td>
+<td>0.0469</td>
+<td>0.9994</td>
+<td>0.9987</td>
+<td>1.0805</td>
+</tr>
+<tr>
+<td>1/64</td>
+<td>4.0000</td>
+<td>0.0625</td>
+<td>0.9995</td>
+<td>0.9990</td>
+<td>1.0626</td>
+</tr>
+<tr>
+<td>1/64</td>
+<td>8.0000</td>
+<td>0.1250</td>
+<td>0.9996</td>
+<td>0.9992</td>
+<td>0.9964</td>
+</tr>
+<tr>
+<td>1/32</td>
+<td>1.0000</td>
+<td>0.0312</td>
+<td>0.8564</td>
+<td>0.7489</td>
+<td>1.0991</td>
+</tr>
+<tr>
+<td>1/32</td>
+<td>1.2500</td>
+<td>0.0391</td>
+<td>0.9398</td>
+<td>0.8864</td>
+<td>1.0897</td>
+</tr>
+<tr>
+<td>1/32</td>
+<td>1.5000</td>
+<td>0.0469</td>
+<td>0.9742</td>
+<td>0.9497</td>
+<td>1.0805</td>
+</tr>
+<tr>
+<td>1/32</td>
+<td>2.0000</td>
+<td>0.0625</td>
+<td>0.9914</td>
+<td>0.9829</td>
+<td>1.0626</td>
+</tr>
+<tr>
+<td>1/32</td>
+<td>3.0000</td>
+<td>0.0938</td>
+<td>0.9953</td>
+<td>0.9906</td>
+<td>1.0285</td>
+</tr>
+<tr>
+<td>1/32</td>
+<td>4.0000</td>
+<td>0.1250</td>
+<td>0.9961</td>
+<td>0.9922</td>
+<td>0.9964</td>
+</tr>
+<tr>
+<td>1/32</td>
+<td>8.0000</td>
+<td>0.2500</td>
+<td>0.9976</td>
+<td>0.9951</td>
+<td>0.8861</td>
+</tr>
+<tr>
+<td>1/16</td>
+<td>1.0000</td>
+<td>0.0625</td>
+<td>0.8422</td>
+<td>0.7275</td>
+<td>1.0626</td>
+</tr>
+<tr>
+<td>1/16</td>
+<td>1.2500</td>
+<td>0.0781</td>
+<td>0.9093</td>
+<td>0.8337</td>
+<td>1.0453</td>
+</tr>
+<tr>
+<td>1/16</td>
+<td>1.5000</td>
+<td>0.0938</td>
+<td>0.9392</td>
+<td>0.8853</td>
+<td>1.0285</td>
+</tr>
+<tr>
+<td>1/16</td>
+<td>2.0000</td>
+<td>0.1250</td>
+<td>0.9627</td>
+<td>0.9281</td>
+<td>0.9964</td>
+</tr>
+<tr>
+<td>1/16</td>
+<td>3.0000</td>
+<td>0.1875</td>
+<td>0.9767</td>
+<td>0.9544</td>
+<td>0.9380</td>
+</tr>
+<tr>
+<td>1/16</td>
+<td>4.0000</td>
+<td>0.2500</td>
+<td>0.9814</td>
+<td>0.9636</td>
+<td>0.8861</td>
+</tr>
+<tr>
+<td>1/16</td>
+<td>8.0000</td>
+<td>0.5000</td>
+<td>0.9906</td>
+<td>0.9814</td>
+<td>0.7254</td>
+</tr>
+<tr>
+<td>1/8</td>
+<td>1.0000</td>
+<td>0.1250</td>
+<td>0.7409</td>
+<td>0.5884</td>
+<td>0.9964</td>
+</tr>
+<tr>
+<td>1/8</td>
+<td>1.2500</td>
+<td>0.1562</td>
+<td>0.7968</td>
+<td>0.6622</td>
+<td>0.9663</td>
+</tr>
+<tr>
+<td>1/8</td>
+<td>1.5000</td>
+<td>0.1875</td>
+<td>0.8346</td>
+<td>0.7161</td>
+<td>0.9380</td>
+</tr>
+<tr>
+<td>1/8</td>
+<td>2.0000</td>
+<td>0.2500</td>
+<td>0.8825</td>
+<td>0.7897</td>
+<td>0.8861</td>
+</tr>
+<tr>
+<td>1/8</td>
+<td>3.0000</td>
+<td>0.3750</td>
+<td>0.9334</td>
+<td>0.8750</td>
+<td>0.7977</td>
+</tr>
+<tr>
+<td>1/8</td>
+<td>4.0000</td>
+<td>0.5000</td>
+<td>0.9586</td>
+<td>0.9204</td>
+<td>0.7254</td>
+</tr>
+<tr>
+<td>1/8</td>
+<td>8.0000</td>
+<td>1.0000</td>
+<td>1.0000</td>
+<td>1.0000</td>
+<td>0.5323</td>
+</tr>
+</tbody></table>
+
+<h2>Decision Against Criteria</h2>
+
+<table>
+<thead><tr>
+<th>criterion</th>
+<th>result</th>
+<th>evidence</th>
+</tr></thead>
+<tbody>
+<tr>
+<td>m&lt;=4 reaches &gt;=95% full-reference recall</td>
+<td>yes</td>
+<td>12 full-pool settings pass</td>
+</tr>
+<tr>
+<td>m&lt;=4 reaches &gt;=95% recall and estimated end-to-end speedup &gt;1</td>
+<td>yes</td>
+<td>7 full-pool settings pass</td>
+</tr>
+<tr>
+<td>pair_mid2 direct classifier matches full-model behavior</td>
+<td>no</td>
+<td>mean direct F1=0.7656; mean full F1=0.9483</td>
+</tr>
+<tr>
+<td>candidate recall is strong on hp_vs_hn before pairwise saturation</td>
+<td>no</td>
+<td>best unsaturated hp_vs_hn recall=0.7550</td>
+</tr>
+</tbody></table>
+
+<h2>Smallest Candidate Multipliers Reaching 95% Recall</h2>
+
+<table>
+<thead><tr>
+<th>selection_rate_label</th>
+<th>multiplier</th>
+<th>candidate_fraction</th>
+<th>final_recall_vs_full</th>
+<th>final_jaccard_vs_full</th>
+<th>estimated_end_to_end_speedup_vs_full</th>
+</tr></thead>
+<tbody>
+<tr>
+<td>1/16</td>
+<td>2.0000</td>
+<td>0.1250</td>
+<td>0.9627</td>
+<td>0.9281</td>
+<td>0.9964</td>
+</tr>
+<tr>
+<td>1/32</td>
+<td>1.5000</td>
+<td>0.0469</td>
+<td>0.9742</td>
+<td>0.9497</td>
+<td>1.0805</td>
+</tr>
+<tr>
+<td>1/64</td>
+<td>1.5000</td>
+<td>0.0234</td>
+<td>0.9736</td>
+<td>0.9486</td>
+<td>1.1086</td>
+</tr>
+<tr>
+<td>1/8</td>
+<td>4.0000</td>
+<td>0.5000</td>
+<td>0.9586</td>
+<td>0.9204</td>
+<td>0.7254</td>
+</tr>
+</tbody></table>
+
+<h2>Pairwise Cascade Diagnostics</h2>
+
+<p>The direct `pair_mid2` metrics below show how useful the ablated score is as a standalone ranking signal before adding full-model reranking.</p>
+
+<table>
+<thead><tr>
+<th>pairwise_task</th>
+<th>pair_mid2_roc_auc_vs_official</th>
+<th>pair_mid2_average_precision_vs_official</th>
+<th>pair_mid2_direct_f1_vs_official</th>
+<th>full_direct_f1_vs_official</th>
+</tr></thead>
+<tbody>
+<tr>
+<td>hp_vs_hn</td>
+<td>0.5098</td>
+<td>0.5073</td>
+<td>0.5069</td>
+<td>0.7381</td>
+</tr>
+<tr>
+<td>hp_vs_rn</td>
+<td>0.6792</td>
+<td>0.6618</td>
+<td>0.6378</td>
+<td>0.9784</td>
+</tr>
+<tr>
+<td>hp_vs_tn</td>
+<td>0.9852</td>
+<td>0.9826</td>
+<td>0.9513</td>
+<td>0.9994</td>
+</tr>
+<tr>
+<td>rp_vs_hn</td>
+<td>0.8013</td>
+<td>0.8430</td>
+<td>0.7269</td>
+<td>0.9796</td>
+</tr>
+<tr>
+<td>rp_vs_rn</td>
+<td>0.8780</td>
+<td>0.9021</td>
+<td>0.8033</td>
+<td>0.9946</td>
+</tr>
+<tr>
+<td>rp_vs_tn</td>
+<td>0.9936</td>
+<td>0.9941</td>
+<td>0.9675</td>
+<td>0.9997</td>
+</tr>
+</tbody></table>
+
+<p>At `m=4`, pairwise tasks with only 200K rows are saturated: the candidate set contains all rows because `4 * k` exceeds the task size. These diagnostics are therefore most useful for showing task difficulty and final full-rerank behavior, not deployment speed.</p>
+
+<table>
+<thead><tr>
+<th>pairwise_task</th>
+<th>candidate_recall_vs_full</th>
+<th>final_recall_vs_full</th>
+<th>cascade_f1_vs_official</th>
+<th>pair_mid2_direct_f1_vs_official</th>
+<th>full_direct_f1_vs_official</th>
+<th>estimated_end_to_end_speedup_vs_full</th>
+</tr></thead>
+<tbody>
+<tr>
+<td>hp_vs_hn</td>
+<td>1.0000</td>
+<td>1.0000</td>
+<td>0.7381</td>
+<td>0.5069</td>
+<td>0.7381</td>
+<td>0.5323</td>
+</tr>
+<tr>
+<td>hp_vs_rn</td>
+<td>1.0000</td>
+<td>1.0000</td>
+<td>0.9784</td>
+<td>0.6378</td>
+<td>0.9784</td>
+<td>0.5323</td>
+</tr>
+<tr>
+<td>hp_vs_tn</td>
+<td>1.0000</td>
+<td>1.0000</td>
+<td>0.9994</td>
+<td>0.9513</td>
+<td>0.9994</td>
+<td>0.5323</td>
+</tr>
+<tr>
+<td>rp_vs_hn</td>
+<td>1.0000</td>
+<td>1.0000</td>
+<td>0.9796</td>
+<td>0.7269</td>
+<td>0.9796</td>
+<td>0.5323</td>
+</tr>
+<tr>
+<td>rp_vs_rn</td>
+<td>1.0000</td>
+<td>1.0000</td>
+<td>0.9946</td>
+<td>0.8033</td>
+<td>0.9946</td>
+<td>0.5323</td>
+</tr>
+<tr>
+<td>rp_vs_tn</td>
+<td>1.0000</td>
+<td>1.0000</td>
+<td>0.9997</td>
+<td>0.9675</td>
+<td>0.9997</td>
+<td>0.5323</td>
+</tr>
+</tbody></table>
+
+<h2>Figures</h2>
+
+<figure><img src="figures/recall_vs_candidate_multiplier.png" alt="Recall vs candidate multiplier"><figcaption>Recall vs candidate multiplier</figcaption></figure>
+
+<figure><img src="figures/jaccard_vs_candidate_multiplier.png" alt="Jaccard vs candidate multiplier"><figcaption>Jaccard vs candidate multiplier</figcaption></figure>
+
+<figure><img src="figures/speedup_vs_recall.png" alt="Speedup vs recall"><figcaption>Speedup vs recall</figcaption></figure>
+
+<figure><img src="figures/pairwise_cascade_f1_by_task.png" alt="Pairwise cascade F1 by task"><figcaption>Pairwise cascade F1 by task</figcaption></figure>
+
+<h2>Interpretation</h2>
+
+<ul>
+<li>The cascade is most attractive for small final selection rates such as `1/64`, where a `4x` candidate set is only `6.25%` of the full pool.</li>
+<li>Because `pair_mid2` itself costs about `0.879x` of a full pass in the measured official run, candidate reranking must be very small to produce an end-to-end speedup.</li>
+<li>Pairwise pool tasks are balanced at 100K positives and 100K negatives; for these diagnostics, multipliers `&gt;=2` already include the whole pairwise task and cannot estimate deployment speed savings.</li>
+<li>The analysis is an offline simulation because full scores already exist for the official 500K pool. A production cascade would need to avoid full scoring outside the candidate set.</li>
+</ul>
+
+<h2>Limitations</h2>
+
+<ul>
+<li>These are score-level simulations, not measured candidate-only GPU runs.</li>
+<li>The official 500K pool is intentionally enriched around the score boundary and is not a random draw from all C4 chunks.</li>
+<li>`pair_mid2` was measured as only modestly faster than full scoring in the official run, so the practical value of the cascade depends on candidate fraction and hardware utilization.</li>
+<li>Pairwise tasks saturate once `m &gt;= 2`, because each balanced pair has only twice as many rows as positives.</li>
+</ul>
+
+<h2>Conclusion</h2>
+
+<p>Pair-mid2 is not useful as a standalone replacement, but it is useful as a cascade prefilter for small full-pool selection rates in the tested regime. The strongest passing setting is selection rate 1/64 at m=1.5, with 0.9736 recall and 1.1086x estimated speedup. The main failure case is the hard-positive vs hard-negative comparison, where unsaturated pair_mid2 candidate recall is weak.</p>
+
+<h2>Reproducibility</h2>
+
+<p>Inputs:</p>
+
+<pre><code>
+data/pair_mid2_cascade_full_rerank/results/score-pool-robustness-official-500k/scores_full.parquet
+data/pair_mid2_cascade_full_rerank/results/score-pool-robustness-official-500k/scores_pair_mid2.parquet
+</code></pre>
+
+<p>Outputs:</p>
+
+<pre><code>
+results/pair-mid2-cascade/cascade_pairwise_metrics.csv
+results/pair-mid2-cascade/cascade_full_pool_metrics.csv
+results/pair-mid2-cascade/cascade_runtime_estimates.csv
+reports/pair-mid2-cascade/report.md
+reports/pair-mid2-cascade/report.html
+</code></pre>
+</body>
+</html>

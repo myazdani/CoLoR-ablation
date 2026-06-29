@@ -1,0 +1,67 @@
+seed: 17
+
+paths:
+  paper_code: ../color-filter-olmo
+  output_dir: results/sequence-length-score-pool
+  figures_dir: reports/sequence-length-score-pool/figures
+
+target:
+  name: books
+  cond_checkpoint: assets/books_cond_hf
+  marg_checkpoint: assets/books_marg_hf
+  tokenizer: allenai/eleuther-ai-gpt-neox-20b-pii-special
+  sequence_length: 512
+
+token_recovery:
+  recovered_tokens: data/score_pool_tokens_official_500k.npy
+  recovered_meta: data/score_pool_meta_official_500k.parquet
+  sequence_length: 512
+
+scoring:
+  batch_size: 256
+  dtype: bf16
+  device: auto
+  shard_size: 25000
+
+metrics:
+  cutoff_tau64: 0.3513622284
+  pairwise_tasks:
+    - hp_vs_hn
+    - hp_vs_rn
+    - hp_vs_tn
+    - rp_vs_hn
+    - rp_vs_rn
+    - rp_vs_tn
+
+sequence_windows:
+  - id: seq_full_512
+    label: Full 512
+    indices: [0, 512]
+  - id: seq_prefix_256
+    label: Prefix 256
+    indices: [0, 256]
+  - id: seq_suffix_256
+    label: Suffix 256
+    indices: [256, 512]
+  - id: seq_prefix_128
+    label: Prefix 128
+    indices: [0, 128]
+  - id: seq_suffix_128
+    label: Suffix 128
+    indices: [384, 512]
+  - id: seq_middle_256
+    label: Middle 256
+    indices: [128, 384]
+  - id: seq_prefix_suffix_256
+    label: Prefix+suffix 256
+    spans:
+      - [0, 128]
+      - [384, 512]
+
+optional_sequence_windows:
+  - id: seq_stride2_256
+    label: Stride 2
+    stride: 2
+  - id: seq_stride4_128
+    label: Stride 4
+    stride: 4
