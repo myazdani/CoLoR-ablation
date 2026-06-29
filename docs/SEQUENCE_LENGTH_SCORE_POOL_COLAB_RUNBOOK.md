@@ -188,6 +188,7 @@ Run one small shard before the full grid.
   --config configs/sequence_length_score_pool.yaml \
   --window seq_prefix_128 \
   --shard-size 512 \
+  --max-rows 512 \
   --force
 ```
 
@@ -225,6 +226,7 @@ for batch_size in [256, 512, 1024]:
       --config configs/sequence_length_score_pool.yaml \
       --window seq_prefix_256 \
       --shard-size 25000 \
+      --max-rows 25000 \
       --force
     test_out = Path(cfg["paths"]["output_dir"])
     for path in [test_out / "scores_seq_prefix_256.parquet", test_out / "scores_seq_prefix_256_shards"]:

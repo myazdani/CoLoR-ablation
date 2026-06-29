@@ -192,7 +192,15 @@ def combine_shards(shard_paths: list[Path], output_path: Path) -> dict[str, floa
     return aggregate
 
 
-def score_window(config: dict[str, Any], window_id: str, *, force: bool = False, shard_size: int | None = None, include_optional: bool = False) -> Path:
+def score_window(
+    config: dict[str, Any],
+    window_id: str,
+    *,
+    force: bool = False,
+    shard_size: int | None = None,
+    max_rows: int | None = None,
+    include_optional: bool = False,
+) -> Path:
     scoring_cfg = config["scoring"]
     token_cfg = config["token_recovery"]
     target = config["target"]
@@ -211,6 +219,12 @@ def score_window(config: dict[str, Any], window_id: str, *, force: bool = False,
     meta = pd.read_parquet(meta_path)
     if len(meta) != len(pool):
         raise ValueError(f"Metadata rows {len(meta)} do not match token rows {len(pool)}")
+    if max_rows is not None:
+        if max_rows <= 0:
+            raise ValueError("--max-rows must be positive")
+        max_rows = min(int(max_rows), len(pool))
+        pool = pool[:max_rows]
+        meta = meta.iloc[:max_rows].copy()
     effective_length = effective_sequence_length(pool, spec)
 
     log(f"loading full models for sequence window={window_id} effective_length={effective_length}")
@@ -299,6 +313,7 @@ def main() -> None:
     parser.add_argument("--include-optional", action="store_true", help="Include optional stride windows.")
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--shard-size", type=int, default=None)
+    parser.add_argument("--max-rows", type=int, default=None, help="Score only the first N rows for smoke tests.")
     args = parser.parse_args()
 
     config = load_config(args.config)
@@ -315,6 +330,7 @@ def main() -> None:
             window_id,
             force=args.force,
             shard_size=args.shard_size,
+            max_rows=args.max_rows,
             include_optional=args.include_optional,
         )
 
