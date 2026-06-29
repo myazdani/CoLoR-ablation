@@ -120,13 +120,15 @@ if actual_olmo != OLMO_SHA:
 print("olmo sha:", actual_olmo)
 ```
 
-Install only missing packages. Avoid installing the full local requirements file,
-which may downgrade Colab's CUDA/PyTorch stack.
+Install the minimal Colab overlay. Avoid installing the full local
+`requirements.txt`, which may downgrade Colab's CUDA/PyTorch stack. The overlay
+includes OLMo import-time dependencies such as `boto3`.
 
 ```python
 # PYTHON CELL
 %cd /content/CoLoR-ablation
-!pip install -q pyarrow pandas scipy matplotlib pyyaml
+import sys
+run(sys.executable, "-m", "pip", "install", "-q", "--no-deps", "-r", "requirements-colab.txt")
 ```
 
 Verify the source pins:
