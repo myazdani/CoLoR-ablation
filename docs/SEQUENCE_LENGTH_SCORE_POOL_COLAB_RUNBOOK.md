@@ -6,9 +6,53 @@ local code changes are available on GitHub.
 The job reuses the official 500K recovered token pool and scores the full Books
 conditional/marginal models on shorter token windows.
 
-## 1. Runtime
+## 0. Resource Assumptions
+
+Recommended Colab resources:
+
+```text
+GPU:          A100 preferred
+GPU RAM:      40GB minimum, 80GB preferred for larger batch-size tests
+System RAM:   >= 50GB
+Drive quota:  enough for scores, metrics, and plots
+```
+
+Unlike the official token-recovery runbook, this workflow should not download
+the raw `323GiB` token shard tree. It reuses the already recovered 500K token
+array on Drive.
+
+## 1. Runtime and Drive
 
 Use a Colab A100 runtime when available.
+
+Check the GPU:
+
+```python
+# PYTHON CELL
+!nvidia-smi
+```
+
+Mount Drive:
+
+```python
+# PYTHON CELL
+from google.colab import drive
+drive.mount("/content/drive")
+```
+
+Define the shared Drive root:
+
+```python
+# PYTHON CELL
+DRIVE = "/content/drive/MyDrive/color-filter-ablation"
+```
+
+Check storage:
+
+```python
+# PYTHON CELL
+!df -h /content /content/drive/MyDrive
+```
 
 Expected inputs on Drive:
 
@@ -26,18 +70,22 @@ MyDrive/color-filter-ablation/results/sequence-length-score-pool/
 MyDrive/color-filter-ablation/reports/sequence-length-score-pool/
 ```
 
-## 2. Setup
+## 2. Clone, Pin, and Install
 
 Use Python setup cells for clone/checkout so failures stop the notebook.
 
 ```python
+# PYTHON CELL
 from pathlib import Path
 import subprocess
 
-DRIVE = "/content/drive/MyDrive/color-filter-ablation"
 PROJECT = Path("/content/CoLoR-ablation")
 REPO = "https://github.com/myazdani/CoLoR-ablation.git"
 SHA = "REPLACE_WITH_PUSHED_COMMIT_SHA"
+
+OLMO = Path("/content/color-filter-olmo")
+OLMO_REPO = "https://github.com/myazdani/color-filter-olmo.git"
+OLMO_SHA = "3e0424c8cc6c53aaad70d3a3dea3fd683658cdd4"
 
 def run(*args):
     subprocess.run([str(arg) for arg in args], check=True)
@@ -45,8 +93,8 @@ def run(*args):
 def out(*args):
     return subprocess.check_output([str(arg) for arg in args], text=True).strip()
 
-from google.colab import drive
-drive.mount("/content/drive")
+if SHA == "REPLACE_WITH_PUSHED_COMMIT_SHA":
+    raise RuntimeError("Set SHA to the pushed CoLoR-ablation commit before running.")
 
 if not PROJECT.exists():
     run("git", "clone", REPO, PROJECT)
@@ -58,21 +106,35 @@ actual = out("git", "-C", PROJECT, "rev-parse", "HEAD")
 if actual != SHA:
     raise RuntimeError(f"SHA mismatch: expected {SHA}, got {actual}")
 print("project sha:", actual)
+
+if not OLMO.exists():
+    run("git", "clone", OLMO_REPO, OLMO)
+elif (OLMO / ".git").is_dir():
+    run("git", "-C", OLMO, "fetch", "origin")
+else:
+    raise RuntimeError(f"{OLMO} exists but is not a git checkout")
+run("git", "-C", OLMO, "checkout", OLMO_SHA)
+actual_olmo = out("git", "-C", OLMO, "rev-parse", "HEAD")
+if actual_olmo != OLMO_SHA:
+    raise RuntimeError(f"OLMo SHA mismatch: expected {OLMO_SHA}, got {actual_olmo}")
+print("olmo sha:", actual_olmo)
 ```
 
-Install only missing packages:
+Install only missing packages. Avoid installing the full local requirements file,
+which may downgrade Colab's CUDA/PyTorch stack.
 
 ```python
+# PYTHON CELL
 %cd /content/CoLoR-ablation
 !pip install -q pyarrow pandas scipy matplotlib pyyaml
 ```
 
-Set the OLMo paper-code path if needed:
+Verify the source pins:
 
 ```python
-OLMO = "/content/color-filter-olmo"
-if not Path(OLMO).exists():
-    run("git", "clone", "https://github.com/davidbrandfonbrener/color-filter-olmo.git", OLMO)
+# PYTHON CELL
+print("project:", out("git", "-C", PROJECT, "rev-parse", "HEAD"))
+print("olmo:", out("git", "-C", OLMO, "rev-parse", "HEAD"))
 ```
 
 ## 3. Configure Drive Paths
@@ -83,7 +145,7 @@ import yaml
 
 cfg_path = Path("configs/sequence_length_score_pool.yaml")
 cfg = yaml.safe_load(cfg_path.read_text())
-cfg["paths"]["paper_code"] = OLMO
+cfg["paths"]["paper_code"] = str(OLMO)
 cfg["paths"]["output_dir"] = f"{DRIVE}/results/sequence-length-score-pool"
 cfg["paths"]["figures_dir"] = f"{DRIVE}/reports/sequence-length-score-pool/figures"
 cfg["token_recovery"]["recovered_tokens"] = f"{DRIVE}/data/score_pool_tokens_official_500k.npy"
